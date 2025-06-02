@@ -166,40 +166,79 @@ pub fn main() !void {
         }
         std.debug.print("max: {d}:{d}\n", .{ max_height, max_width });
 
-        var combined_image_storage: []u32 = try allocator.alloc(u32, frames.len * max_height * max_width);
+        var combined_image_storage: []u32 = try allocator.alloc(u32, 60 * max_height * max_width);
         defer allocator.free(combined_image_storage);
         for (0..combined_image_storage.len) |i| {
             combined_image_storage[i] = 0;
         }
 
-        const frames_perm = try transpose(allocator, 5, 4, 0);
-        defer allocator.free(frames_perm);
-        for (0..4) |i| {
-            for (0..5) |j| {
-                const target_frame = frames[frames_perm[i * 5 + j]];
-                const frame_offset_w: usize = (max_width - target_frame.width) / 2;
-                const frame_offset_h: usize = (max_height - target_frame.height) / 2;
-                for (0..target_frame.height) |h| {
-                    for (0..target_frame.width) |w| {
-                        const combined_image_storage_offset_h: usize = max_width * 5 * (i * max_height + h + frame_offset_h);
-                        const combined_image_storage_offset_w: usize = j * max_width + w + frame_offset_w;
-                        // const combined_image_storage_offset: usize = i * 5 * max_height * max_width + j * max_width + (h + frame_offset_h) * max_width + w + frame_offset_w;
-                        const combined_image_storage_offset: usize = combined_image_storage_offset_h + combined_image_storage_offset_w;
-                        const target_frame_offset = h * target_frame.width + w;
-                        // if (i == 0 and j == 0) {
-                        //     std.debug.print("frame {d}:{d}, size: {d}x{d}, offsets: {d}:{d}, put: {d}:{d} => {d}:{d} \n", .{ i, j, target_frame.height, target_frame.width, frame_offset_h, frame_offset_w, h, w, combined_image_storage_offset_h, combined_image_storage_offset_w });
-                        // }
-                        combined_image_storage[combined_image_storage_offset] = palette[target_frame.pixels[target_frame_offset]];
-                    }
-                }
-            }
+        {
+            const frames_perm = try transpose(allocator, 5, 4, 0);
+            defer allocator.free(frames_perm);
+            write_block(4, 5, frames, frames_perm, &palette, combined_image_storage[0 .. 5 * 4 * max_height * max_width]);
         }
-        var combined_image = try zigimg.Image.fromRawPixels(allocator, max_width * 5, max_height * 4, @ptrCast(combined_image_storage), .rgba32);
+
+        {
+            const frames_perm = try transpose(allocator, 5, 4, 20);
+            defer allocator.free(frames_perm);
+            write_block(4, 5, frames, frames_perm, &palette, combined_image_storage[5 * 4 * max_height * max_width .. 2 * 5 * 4 * max_height * max_width]);
+        }
+        {
+            const frames_perm = try replicate(allocator, 4, 5, 40);
+            defer allocator.free(frames_perm);
+            for (frames_perm) |f| {
+                std.debug.print("{d} ", .{f});
+            }
+            std.debug.print("\n", .{});
+            write_block(4, 5, frames, frames_perm, &palette, combined_image_storage[2 * 5 * 4 * max_height * max_width .. 3 * 5 * 4 * max_height * max_width]);
+        }
+
+        var combined_image = try zigimg.Image.fromRawPixels(allocator, max_width * 5, max_height * 4 * 3, @ptrCast(combined_image_storage), .rgba32);
         defer combined_image.deinit();
         try combined_image.writeToFilePath("C:/Projects/sheet.png", .{ .png = .{} });
     }
 
     _ = rogue_alt_lua;
+}
+
+fn write_block(result_rows: usize, result_cols: usize, frames: []Frame, frames_perm: []usize, palette: []u32, storage: []u32) void {
+    var max_width: usize = 0;
+    var max_height: usize = 0;
+    for (frames) |f| {
+        if (f.height > max_height) max_height = f.height;
+        if (f.width > max_width) max_width = f.width;
+    }
+
+    for (0..result_rows) |i| {
+        for (0..result_cols) |j| {
+            const source_frame = frames[frames_perm[i * result_cols + j]];
+            const frame_offset_w: usize = (max_width - source_frame.width) / 2;
+            const frame_offset_h: usize = (max_height - source_frame.height) / 2;
+            for (0..source_frame.height) |h| {
+                for (0..source_frame.width) |w| {
+                    const combined_image_storage_offset_h: usize = max_width * result_cols * (i * max_height + h + frame_offset_h);
+                    const combined_image_storage_offset_w: usize = j * max_width + w + frame_offset_w;
+                    // const combined_image_storage_offset: usize = i * 5 * max_height * max_width + j * max_width + (h + frame_offset_h) * max_width + w + frame_offset_w;
+                    const combined_image_storage_offset: usize = combined_image_storage_offset_h + combined_image_storage_offset_w;
+                    const target_frame_offset = h * source_frame.width + w;
+                    // if (i == 0 and j == 0) {
+                    //     std.debug.print("frame {d}:{d}, size: {d}x{d}, offsets: {d}:{d}, put: {d}:{d} => {d}:{d} \n", .{ i, j, target_frame.height, target_frame.width, frame_offset_h, frame_offset_w, h, w, combined_image_storage_offset_h, combined_image_storage_offset_w });
+                    // }
+                    storage[combined_image_storage_offset] = palette[source_frame.pixels[target_frame_offset]];
+                }
+            }
+        }
+    }
+}
+
+fn replicate(allocator: std.mem.Allocator, items: usize, cols: usize, offset: usize) ![]usize {
+    var result: []usize = try allocator.alloc(usize, items * cols);
+    for (0..items) |i| {
+        for (0..cols) |c| {
+            result[cols * i + c] = i + offset;
+        }
+    }
+    return result;
 }
 
 fn transpose(allocator: std.mem.Allocator, rows: usize, cols: usize, offset: usize) ![]usize {
