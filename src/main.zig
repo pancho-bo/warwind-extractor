@@ -88,33 +88,16 @@ pub fn main() !void {
     //read 12 bytes from the start already
     try data.skipBytes(palette_start - 12, .{});
 
-    var palette: [256]u32 = undefined;
+    var palette: [256]zigimg.color.Rgba32 align(1) = undefined;
     {
-        var i: usize = 0;
-        while (i < 256) : (i += 1) {
-            const r: u32 = @as(u32, try data.readByte() << 2);
-            const g: u32 = @as(u32, try data.readByte() << 2);
-            const b: u32 = @as(u32, try data.readByte() << 2);
-            const a: u32 = if (i == 0) 0 else 0xff; // Zero color is transparent
-            palette[i] = @byteSwap((r << 24) | (g << 16) | (b << 8) | a);
+        for (0..256) |i| {
+            const r: u8 = try data.readByte() << 2;
+            const g: u8 = try data.readByte() << 2;
+            const b: u8 = try data.readByte() << 2;
+            const a: u8 = if (i == 0) 0 else 0xff; // Zero color is transparent
+            palette[i] = zigimg.color.Rgba32.initRgba(@intCast(r), @intCast(g), @intCast(b), @intCast(a));
         }
     }
-
-    {
-        var j: usize = 0;
-        while (j < 16) : (j += 1) {
-            var k: usize = 0;
-            while (k < 16) : (k += 1) {
-                try stdout.print("{x}|", .{palette[j * 16 + k]});
-            }
-            try stdout.print("\n", .{});
-        }
-        try bw.flush(); // Don't forget to flush!
-    }
-
-    try stdout.print("\n", .{});
-    try stdout.print("\n", .{});
-    try stdout.print("\n", .{});
 
     //*   Output palette *//
     {
@@ -143,19 +126,16 @@ pub fn main() !void {
         const frames: []Frame = try readSpriteSheet(frames_allocator, file, index[rogue_lua]);
         defer frames_arena_allocator.deinit();
 
-        const pixels = try allocator.alloc(u32, frames[0].height * frames[0].width);
-        defer allocator.free(pixels);
-
-        {
-            var i: usize = 0;
-            while (i < frames[0].height * frames[0].width) : (i += 1) {
-                const pixel_index: usize = @intCast(frames[0].pixels[i]);
-                pixels[i] = palette[pixel_index];
-            }
+        var image = try zigimg.Image.create(allocator, frames[0].width, frames[0].height, .indexed8);
+        // var image = try zigimg.Image.fromRawPixels(allocator, frames[0].width, frames[0].height, @ptrCast(pixels), .rgba32);
+        defer image.deinit();
+        for (0..palette.len) |i| {
+            image.pixels.indexed8.palette[i] = palette[i];
+        }
+        for (0..frames[0].pixels.len) |i| {
+            image.pixels.indexed8.indices[i] = frames[0].pixels[i];
         }
 
-        var image = try zigimg.Image.fromRawPixels(allocator, frames[0].width, frames[0].height, @ptrCast(pixels), .rgba32);
-        defer image.deinit();
         try image.writeToFilePath("C:/Projects/rogue1.png", .{ .png = .{} });
 
         var max_width: usize = 0;
@@ -166,7 +146,7 @@ pub fn main() !void {
         }
         std.debug.print("max: {d}:{d}\n", .{ max_height, max_width });
 
-        var combined_image_storage: []u32 = try allocator.alloc(u32, 60 * max_height * max_width);
+        var combined_image_storage: []u8 = try allocator.alloc(u8, 60 * max_height * max_width);
         defer allocator.free(combined_image_storage);
         for (0..combined_image_storage.len) |i| {
             combined_image_storage[i] = 0;
@@ -175,13 +155,13 @@ pub fn main() !void {
         {
             const frames_perm = try transpose(allocator, 5, 4, 0);
             defer allocator.free(frames_perm);
-            write_block(4, 5, frames, frames_perm, &palette, combined_image_storage[0 .. 5 * 4 * max_height * max_width]);
+            write_block(4, 5, frames, frames_perm, combined_image_storage[0 .. 5 * 4 * max_height * max_width]);
         }
 
         {
             const frames_perm = try transpose(allocator, 5, 4, 20);
             defer allocator.free(frames_perm);
-            write_block(4, 5, frames, frames_perm, &palette, combined_image_storage[5 * 4 * max_height * max_width .. 2 * 5 * 4 * max_height * max_width]);
+            write_block(4, 5, frames, frames_perm, combined_image_storage[5 * 4 * max_height * max_width .. 2 * 5 * 4 * max_height * max_width]);
         }
         {
             const frames_perm = try replicate(allocator, 4, 5, 40);
@@ -190,18 +170,25 @@ pub fn main() !void {
                 std.debug.print("{d} ", .{f});
             }
             std.debug.print("\n", .{});
-            write_block(4, 5, frames, frames_perm, &palette, combined_image_storage[2 * 5 * 4 * max_height * max_width .. 3 * 5 * 4 * max_height * max_width]);
+            write_block(4, 5, frames, frames_perm, combined_image_storage[2 * 5 * 4 * max_height * max_width .. 3 * 5 * 4 * max_height * max_width]);
         }
 
-        var combined_image = try zigimg.Image.fromRawPixels(allocator, max_width * 5, max_height * 4 * 3, @ptrCast(combined_image_storage), .rgba32);
+        var combined_image = try zigimg.Image.create(allocator, max_width * 5, max_height * 4 * 3, .indexed8);
         defer combined_image.deinit();
+        for (0..palette.len) |i| {
+            combined_image.pixels.indexed8.palette[i] = palette[i];
+        }
+        for (0..(60 * max_width * max_height)) |i| {
+            combined_image.pixels.indexed8.indices[i] = combined_image_storage[i];
+        }
+
         try combined_image.writeToFilePath("C:/Projects/sheet.png", .{ .png = .{} });
     }
 
     _ = rogue_alt_lua;
 }
 
-fn write_block(result_rows: usize, result_cols: usize, frames: []Frame, frames_perm: []usize, palette: []u32, storage: []u32) void {
+fn write_block(result_rows: usize, result_cols: usize, frames: []Frame, frames_perm: []usize, storage: []u8) void {
     var max_width: usize = 0;
     var max_height: usize = 0;
     for (frames) |f| {
@@ -224,7 +211,7 @@ fn write_block(result_rows: usize, result_cols: usize, frames: []Frame, frames_p
                     // if (i == 0 and j == 0) {
                     //     std.debug.print("frame {d}:{d}, size: {d}x{d}, offsets: {d}:{d}, put: {d}:{d} => {d}:{d} \n", .{ i, j, target_frame.height, target_frame.width, frame_offset_h, frame_offset_w, h, w, combined_image_storage_offset_h, combined_image_storage_offset_w });
                     // }
-                    storage[combined_image_storage_offset] = palette[source_frame.pixels[target_frame_offset]];
+                    storage[combined_image_storage_offset] = source_frame.pixels[target_frame_offset];
                 }
             }
         }
