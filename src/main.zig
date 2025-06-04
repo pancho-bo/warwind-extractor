@@ -36,10 +36,12 @@ pub fn main() !void {
 
     _ = try lua.getGlobal("Rogue");
     const rogue_lua: usize = @intCast(try lua.toInteger(-1));
+    _ = rogue_lua;
     lua.pop(1);
 
     _ = try lua.getGlobal("RogueAlt");
     const rogue_alt_lua: usize = @intCast(try lua.toInteger(-1));
+    _ = rogue_alt_lua;
     lua.pop(1);
 
     {
@@ -123,20 +125,43 @@ pub fn main() !void {
         //*   Read sprite sheet format: *//
         var frames_arena_allocator = std.heap.ArenaAllocator.init(allocator);
         const frames_allocator = frames_arena_allocator.allocator();
-        const frames: []Frame = try readSpriteSheet(frames_allocator, file, index[rogue_lua]);
+        const frames: []Frame = try readSpriteSheet(frames_allocator, file, index[56]);
+        const frames_alt: []Frame = try readSpriteSheet(frames_allocator, file, index[98]);
         defer frames_arena_allocator.deinit();
 
-        var image = try zigimg.Image.create(allocator, frames[0].width, frames[0].height, .indexed8);
-        // var image = try zigimg.Image.fromRawPixels(allocator, frames[0].width, frames[0].height, @ptrCast(pixels), .rgba32);
-        defer image.deinit();
-        for (0..palette.len) |i| {
-            image.pixels.indexed8.palette[i] = palette[i];
-        }
-        for (0..frames[0].pixels.len) |i| {
-            image.pixels.indexed8.indices[i] = frames[0].pixels[i];
-        }
+        {
+            const frame: usize = 0;
+            var image = try zigimg.Image.create(allocator, frames[frame].width, frames[frame].height, .indexed8);
+            var image_alt = try zigimg.Image.create(allocator, frames_alt[frame].width, frames_alt[frame].height, .indexed8);
+            // var image = try zigimg.Image.fromRawPixels(allocator, frames[0].width, frames[0].height, @ptrCast(pixels), .rgba32);
+            defer image.deinit();
+            defer image_alt.deinit();
+            for (0..palette.len) |i| {
+                image.pixels.indexed8.palette[i] = palette[i];
+            }
+            for (0..frames[frame].pixels.len) |i| {
+                image.pixels.indexed8.indices[i] = frames[frame].pixels[i];
+            }
+            for (0..palette.len) |i| {
+                image_alt.pixels.indexed8.palette[i] = palette[i];
+            }
+            for (0..frames[frame].pixels.len) |i| {
+                if (frames[frame].pixels[i] != frames_alt[frame].pixels[i]) {
+                    image_alt.pixels.indexed8.indices[i] = frames_alt[frame].pixels[i];
+                } else {
+                    image_alt.pixels.indexed8.indices[i] = 0;
+                }
+            }
+            for (image_alt.pixels.indexed8.indices) |i| {
+                if (i != 0) {
+                    std.debug.print("{d}|", .{i});
+                }
+            }
+            std.debug.print("\n", .{});
 
-        try image.writeToFilePath("C:/Projects/rogue1.png", .{ .png = .{} });
+            try image.writeToFilePath("C:/Projects/rogue1.png", .{ .png = .{} });
+            try image_alt.writeToFilePath("C:/Projects/rogue2.png", .{ .png = .{} });
+        }
 
         var max_width: usize = 0;
         var max_height: usize = 0;
@@ -184,8 +209,6 @@ pub fn main() !void {
 
         try combined_image.writeToFilePath("C:/Projects/sheet.png", .{ .png = .{} });
     }
-
-    _ = rogue_alt_lua;
 }
 
 fn write_block(result_rows: usize, result_cols: usize, frames: []Frame, frames_perm: []usize, storage: []u8) void {
