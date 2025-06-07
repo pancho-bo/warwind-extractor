@@ -34,15 +34,15 @@ pub fn main() !void {
     const palette_lua: usize = @intCast(try lua.toInteger(-1));
     lua.pop(1);
 
-    _ = try lua.getGlobal("Rogue");
-    const rogue_lua: usize = @intCast(try lua.toInteger(-1));
-    _ = rogue_lua;
-    lua.pop(1);
+    // _ = try lua.getGlobal("Rogue");
+    // const rogue_lua: usize = @intCast(try lua.toInteger(-1));
+    // _ = rogue_lua;
+    // lua.pop(1);
 
-    _ = try lua.getGlobal("RogueAlt");
-    const rogue_alt_lua: usize = @intCast(try lua.toInteger(-1));
-    _ = rogue_alt_lua;
-    lua.pop(1);
+    // const t = try lua.getGlobal("TharoonUnits");
+    // std.testing.expect(t == .table);
+
+    // lua.rawGetIndex();
 
     {
         // var image = try zigimg.Image.fromFilePath(allocator, "C:/Projects/data.wwgus/graphics/missiles/ww/shamali_missile.png");
@@ -121,94 +121,145 @@ pub fn main() !void {
         try image.writeToFilePath("C:/Projects/p1.png", .{ .png = .{} });
     }
 
-    {
-        //*   Read sprite sheet format: *//
-        var frames_arena_allocator = std.heap.ArenaAllocator.init(allocator);
-        const frames_allocator = frames_arena_allocator.allocator();
-        const frames: []Frame = try readSpriteSheet(frames_allocator, file, index[56]);
-        const frames_alt: []Frame = try readSpriteSheet(frames_allocator, file, index[98]);
-        defer frames_arena_allocator.deinit();
+    const ops = [_]FramesBlockOperation{ FramesBlockOperation{ .transpose = Transpose{ .rows = 5, .cols = 4 } }, FramesBlockOperation{ .transpose = Transpose{ .rows = 5, .cols = 4 } }, FramesBlockOperation{ .replicate = Replicate{ .items = 4, .times = 5 } } };
+    try outputFrames(allocator, file, index[40], palette, &ops, "minister");
+}
 
-        {
-            const frame: usize = 0;
-            var image = try zigimg.Image.create(allocator, frames[frame].width, frames[frame].height, .indexed8);
-            var image_alt = try zigimg.Image.create(allocator, frames_alt[frame].width, frames_alt[frame].height, .indexed8);
-            // var image = try zigimg.Image.fromRawPixels(allocator, frames[0].width, frames[0].height, @ptrCast(pixels), .rgba32);
-            defer image.deinit();
-            defer image_alt.deinit();
-            for (0..palette.len) |i| {
-                image.pixels.indexed8.palette[i] = palette[i];
-            }
-            for (0..frames[frame].pixels.len) |i| {
-                image.pixels.indexed8.indices[i] = frames[frame].pixels[i];
-            }
-            for (0..palette.len) |i| {
-                image_alt.pixels.indexed8.palette[i] = palette[i];
-            }
-            for (0..frames[frame].pixels.len) |i| {
-                if (frames[frame].pixels[i] != frames_alt[frame].pixels[i]) {
-                    image_alt.pixels.indexed8.indices[i] = frames_alt[frame].pixels[i];
-                } else {
-                    image_alt.pixels.indexed8.indices[i] = 0;
-                }
-            }
-            for (image_alt.pixels.indexed8.indices) |i| {
-                if (i != 0) {
-                    std.debug.print("{d}|", .{i});
-                }
-            }
-            std.debug.print("\n", .{});
+const Transpose = struct { rows: usize, cols: usize };
 
-            try image.writeToFilePath("C:/Projects/rogue1.png", .{ .png = .{} });
-            try image_alt.writeToFilePath("C:/Projects/rogue2.png", .{ .png = .{} });
-        }
+const Replicate = struct { items: usize, times: usize };
 
-        var max_width: usize = 0;
-        var max_height: usize = 0;
-        for (frames) |f| {
-            if (f.height > max_height) max_height = f.height;
-            if (f.width > max_width) max_width = f.width;
-        }
-        std.debug.print("max: {d}:{d}\n", .{ max_height, max_width });
+const FramesBlockOperationTag = enum { transpose, replicate };
 
-        var combined_image_storage: []u8 = try allocator.alloc(u8, 60 * max_height * max_width);
-        defer allocator.free(combined_image_storage);
-        for (0..combined_image_storage.len) |i| {
-            combined_image_storage[i] = 0;
-        }
+const FramesBlockOperation = union(FramesBlockOperationTag) { transpose: Transpose, replicate: Replicate };
 
-        {
-            const frames_perm = try transpose(allocator, 5, 4, 0);
-            defer allocator.free(frames_perm);
-            write_block(4, 5, frames, frames_perm, combined_image_storage[0 .. 5 * 4 * max_height * max_width]);
-        }
+fn outputFrames(allocator: std.mem.Allocator, file: std.fs.File, offset: u32, palette: [256]zigimg.color.Rgba32, operations: []const FramesBlockOperation, name: []const u8) !void {
+    //*   Read sprite sheet format: *//
+    var frames_arena_allocator = std.heap.ArenaAllocator.init(allocator);
+    const frames_allocator = frames_arena_allocator.allocator();
 
-        {
-            const frames_perm = try transpose(allocator, 5, 4, 20);
-            defer allocator.free(frames_perm);
-            write_block(4, 5, frames, frames_perm, combined_image_storage[5 * 4 * max_height * max_width .. 2 * 5 * 4 * max_height * max_width]);
-        }
-        {
-            const frames_perm = try replicate(allocator, 4, 5, 40);
-            defer allocator.free(frames_perm);
-            for (frames_perm) |f| {
-                std.debug.print("{d} ", .{f});
-            }
-            std.debug.print("\n", .{});
-            write_block(4, 5, frames, frames_perm, combined_image_storage[2 * 5 * 4 * max_height * max_width .. 3 * 5 * 4 * max_height * max_width]);
-        }
+    const frames: []Frame = try readSpriteSheet(frames_allocator, file, offset);
 
-        var combined_image = try zigimg.Image.create(allocator, max_width * 5, max_height * 4 * 3, .indexed8);
-        defer combined_image.deinit();
-        for (0..palette.len) |i| {
-            combined_image.pixels.indexed8.palette[i] = palette[i];
-        }
-        for (0..(60 * max_width * max_height)) |i| {
-            combined_image.pixels.indexed8.indices[i] = combined_image_storage[i];
-        }
+    // const frames_alt: []Frame = try readSpriteSheet(frames_allocator, file, index[98]);
 
-        try combined_image.writeToFilePath("C:/Projects/sheet.png", .{ .png = .{} });
+    defer frames_arena_allocator.deinit();
+
+    // {
+    //     const frame: usize = 0;
+    //     var image = try zigimg.Image.create(allocator, frames[frame].width, frames[frame].height, .indexed8);
+    //     var image_alt = try zigimg.Image.create(allocator, frames_alt[frame].width, frames_alt[frame].height, .indexed8);
+    //     var image = try zigimg.Image.fromRawPixels(allocator, frames[0].width, frames[0].height, @ptrCast(pixels), .rgba32);
+    //     defer image.deinit();
+    //     defer image_alt.deinit();
+
+    //     for (0..palette.len) |i| {
+    //         image.pixels.indexed8.palette[i] = palette[i];
+    //     }
+    //     for (0..frames[frame].pixels.len) |i| {
+    //         image.pixels.indexed8.indices[i] = frames[frame].pixels[i];
+    //     }
+    //     for (0..palette.len) |i| {
+    //         image_alt.pixels.indexed8.palette[i] = palette[i];
+    //     }
+    //     for (0..frames[frame].pixels.len) |i| {
+    //         if (frames[frame].pixels[i] != frames_alt[frame].pixels[i]) {
+    //             image_alt.pixels.indexed8.indices[i] = frames_alt[frame].pixels[i];
+    //         } else {
+    //             image_alt.pixels.indexed8.indices[i] = 0;
+    //         }
+    //     }
+    //     for (image_alt.pixels.indexed8.indices) |i| {
+    //         if (i != 0) {
+    //             std.debug.print("{d}|", .{i});
+    //         }
+    //     }
+    //     std.debug.print("\n", .{});
+
+    //     try image.writeToFilePath("C:/Projects/rogue1.png", .{ .png = .{} });
+    //     try image_alt.writeToFilePath("C:/Projects/rogue2.png", .{ .png = .{} });
+    // }
+
+    var max_width: usize = 0;
+    var max_height: usize = 0;
+    for (frames) |f| {
+        if (f.height > max_height) max_height = f.height;
+        if (f.width > max_width) max_width = f.width;
     }
+    std.debug.print("frames: {d}, frame size: {d}x{d}\n", .{ frames.len, max_width, max_height });
+
+    var out_frames: usize = 0;
+    var read_frames: usize = 0;
+    for (operations) |o| {
+        switch (o) {
+            .transpose => {
+                out_frames += o.transpose.cols * o.transpose.rows;
+                read_frames += o.transpose.cols * o.transpose.rows;
+            },
+            .replicate => {
+                out_frames += o.replicate.items * o.replicate.times;
+                read_frames += o.replicate.items;
+            },
+        }
+    }
+    std.debug.print("operations on {d} frames, output {d} frames\n", .{ read_frames, out_frames });
+    try std.testing.expect(read_frames <= frames.len);
+
+    var combined_image_storage: []u8 = try allocator.alloc(u8, out_frames * max_height * max_width);
+    defer allocator.free(combined_image_storage);
+    @memset(combined_image_storage, 0);
+
+    var frames_done: usize = 0;
+    var result_cols: usize = 0;
+    var result_rows: usize = 0;
+    for (operations) |o| {
+        switch (o) {
+            .transpose => {
+                if (result_cols == 0 or result_cols == o.transpose.rows) {
+                    result_cols = o.transpose.rows;
+                } else {
+                    return error.ResultColumnsVaries;
+                }
+                const frames_perm = try transpose(allocator, o.transpose.rows, o.transpose.cols, frames_done);
+                defer allocator.free(frames_perm);
+                const frames_to_do: usize = o.transpose.cols * o.transpose.rows;
+                write_block(o.transpose.cols, o.transpose.rows, frames, frames_perm, combined_image_storage[frames_done * max_height * max_width .. (frames_done + frames_to_do) * max_height * max_width]);
+                frames_done += frames_to_do;
+                result_rows += o.transpose.cols;
+                std.debug.print("frames done: {d}, frames to do: {d}, rows done: {d}\n", .{ frames_done, frames_to_do, result_rows });
+            },
+            .replicate => {
+                if (result_cols == 0 or result_cols == o.replicate.times) {
+                    result_cols = o.replicate.times;
+                } else {
+                    return error.ResultColumnsVaries;
+                }
+                const frames_perm = try replicate(allocator, o.replicate.items, o.replicate.times, frames_done);
+                defer allocator.free(frames_perm);
+                const frames_to_do: usize = o.replicate.items * o.replicate.times;
+                for (frames_perm) |f| {
+                    std.debug.print("{d} ", .{f});
+                }
+                std.debug.print("\n", .{});
+                write_block(o.replicate.items, o.replicate.times, frames, frames_perm, combined_image_storage[frames_done * max_height * max_width .. (frames_done + frames_to_do) * max_height * max_width]);
+                result_rows += o.replicate.items;
+                frames_done += o.replicate.items * o.replicate.times;
+            },
+        }
+    }
+
+    var combined_image = try zigimg.Image.create(allocator, max_width * result_cols, max_height * result_rows, .indexed8);
+    defer combined_image.deinit();
+    for (0..palette.len) |i| {
+        combined_image.pixels.indexed8.palette[i] = palette[i];
+    }
+    for (0..(out_frames * max_width * max_height)) |i| {
+        combined_image.pixels.indexed8.indices[i] = combined_image_storage[i];
+    }
+
+    const dir = "C:/Projects";
+    const outfile = try std.fmt.allocPrint(allocator, "{s}/{s}.png", .{ dir, name });
+    defer allocator.free(outfile);
+    try combined_image.writeToFilePath(outfile, .{ .png = .{} });
 }
 
 fn write_block(result_rows: usize, result_cols: usize, frames: []Frame, frames_perm: []usize, storage: []u8) void {
@@ -271,6 +322,10 @@ test "traspose_test" {
     const t2 = try transpose(allocator, 2, 3, 10);
     defer allocator.free(t2);
     try std.testing.expect(std.mem.eql(usize, t2, &t1));
+}
+
+fn extractFrame(lua: *Lua) i32 {
+    lua.getTable(0);
 }
 
 fn readSpriteSheet(frames_allocator: std.mem.Allocator, file: std.fs.File, offset: u32) ![]Frame {
