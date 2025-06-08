@@ -35,12 +35,12 @@ TharoonUnits = {
         frames = Frames { Transpose(5, 4), Transpose(5, 4), Replicate(5, 5) }
     },
     Unit {
-        name = "executioner",
+        name = "rogue",
         data_index = 43,
         frames = Frames { Transpose(5, 4), Transpose(5, 4), Replicate(4, 5) }
     },
     Unit {
-        name = "rogue",
+        name = "executioner",
         data_index = 44,
         frames = Frames { Transpose(5, 4), Transpose(5, 4), Replicate(4, 5) }
     },

@@ -122,7 +122,50 @@ pub fn main() !void {
     }
 
     const ops = [_]FramesBlockOperation{ FramesBlockOperation{ .transpose = Transpose{ .rows = 5, .cols = 4 } }, FramesBlockOperation{ .transpose = Transpose{ .rows = 5, .cols = 4 } }, FramesBlockOperation{ .replicate = Replicate{ .items = 4, .times = 5 } } };
-    try outputFrames(allocator, file, index[40], palette, &ops, "minister");
+    try outputFrames(allocator, file, index[40], palette, &ops, "minister", 88, 88, 8);
+    try outputFrames(allocator, file, index[41], palette, &ops, "servant", 88, 88, 8);
+    try outputFrames(allocator, file, index[42], palette, &ops, "rover", 88, 88, 8);
+    try outputFrames(allocator, file, index[43], palette, &ops, "rogue", 88, 88, 8);
+    try outputFrames(allocator, file, index[44], palette, &ops, "executioner", 88, 88, 8);
+    try outputFrames(allocator, file, index[45], palette, &ops, "psychic", 88, 88, 8);
+
+    try outputFrames(allocator, file, index[58], palette, &ops, "dancer", 80, 88, 8);
+    try outputFrames(allocator, file, index[59], palette, &ops, "initiate", 80, 88, 8);
+    try outputFrames(allocator, file, index[60], palette, &ops, "cavalier", 80, 88, 8);
+    try outputFrames(allocator, file, index[61], palette, &ops, "disciple", 80, 88, 8);
+    try outputFrames(allocator, file, index[62], palette, &ops, "defender", 80, 88, 8);
+    try outputFrames(allocator, file, index[63], palette, &ops, "shaman", 80, 88, 8);
+
+    try outputFrames(allocator, file, index[58], palette, &ops, "dancer", 80, 88, 8);
+    try outputFrames(allocator, file, index[59], palette, &ops, "initiate", 80, 88, 8);
+    try outputFrames(allocator, file, index[60], palette, &ops, "cavalier", 80, 88, 8);
+    try outputFrames(allocator, file, index[61], palette, &ops, "disciple", 80, 88, 8);
+    try outputFrames(allocator, file, index[62], palette, &ops, "defender", 80, 88, 8);
+    try outputFrames(allocator, file, index[63], palette, &ops, "shaman", 80, 88, 8);
+
+    try outputFrames(allocator, file, index[94], palette, &ops, "primemaker", 240, 88, 8);
+    try outputFrames(allocator, file, index[95], palette, &ops, "scrub", 240, 88, 8);
+    try outputFrames(allocator, file, index[96], palette, &ops, "weed", 240, 88, 8);
+    try outputFrames(allocator, file, index[97], palette, &ops, "scout", 240, 88, 8);
+    try outputFrames(allocator, file, index[98], palette, &ops, "squire", 240, 88, 8);
+    try outputFrames(allocator, file, index[99], palette, &ops, "druid", 240, 88, 8);
+
+    try outputFrames(allocator, file, index[88], palette, &ops, "general", 64, 88, 8);
+    try outputFrames(allocator, file, index[89], palette, &ops, "worker", 64, 88, 8);
+    try outputFrames(allocator, file, index[90], palette, &ops, "biker", 64, 88, 8);
+    try outputFrames(allocator, file, index[91], palette, &ops, "agent", 64, 88, 8);
+    try outputFrames(allocator, file, index[92], palette, &ops, "veteran", 64, 88, 8);
+    try outputFrames(allocator, file, index[93], palette, &ops, "sorcerer", 64, 88, 8);
+
+    // try outputFrames(allocator, file, index[46], palette, &ops, "general", 56, 88, 8);
+    // try outputFrames(allocator, file, index[47], palette, &ops, "worker", 56, 88, 8);
+    // try outputFrames(allocator, file, index[48], palette, &ops, "biker", 56, 88, 8);
+    // try outputFrames(allocator, file, index[49], palette, &ops, "agent", 56, 88, 8);
+    // try outputFrames(allocator, file, index[50], palette, &ops, "veteran", 56, 88, 8);
+    // try outputFrames(allocator, file, index[51], palette, &ops, "sorcerer", 56, 88, 8);
+
+    try outputFrames(allocator, file, index[66], palette, &ops, "primeminister", 88, 88, 8);
+    try outputFrames(allocator, file, index[64], palette, &ops, "primeminister", 88, 88, 8);
 }
 
 const Transpose = struct { rows: usize, cols: usize };
@@ -133,7 +176,7 @@ const FramesBlockOperationTag = enum { transpose, replicate };
 
 const FramesBlockOperation = union(FramesBlockOperationTag) { transpose: Transpose, replicate: Replicate };
 
-fn outputFrames(allocator: std.mem.Allocator, file: std.fs.File, offset: u32, palette: [256]zigimg.color.Rgba32, operations: []const FramesBlockOperation, name: []const u8) !void {
+fn outputFrames(allocator: std.mem.Allocator, file: std.fs.File, offset: u32, palette: [256]zigimg.color.Rgba32, operations: []const FramesBlockOperation, name: []const u8, remap_colors_from: u8, remap_colors_to: u8, remap_colors_n: u8) !void {
     //*   Read sprite sheet format: *//
     var frames_arena_allocator = std.heap.ArenaAllocator.init(allocator);
     const frames_allocator = frames_arena_allocator.allocator();
@@ -185,7 +228,7 @@ fn outputFrames(allocator: std.mem.Allocator, file: std.fs.File, offset: u32, pa
         if (f.height > max_height) max_height = f.height;
         if (f.width > max_width) max_width = f.width;
     }
-    std.debug.print("frames: {d}, frame size: {d}x{d}\n", .{ frames.len, max_width, max_height });
+    std.debug.print("{s}: frames: {d}, frame size: {d}x{d}\n", .{ name, frames.len, max_width, max_height });
 
     var out_frames: usize = 0;
     var read_frames: usize = 0;
@@ -201,7 +244,7 @@ fn outputFrames(allocator: std.mem.Allocator, file: std.fs.File, offset: u32, pa
             },
         }
     }
-    std.debug.print("operations on {d} frames, output {d} frames\n", .{ read_frames, out_frames });
+    // std.debug.print("operations on {d} frames, output {d} frames\n", .{ read_frames, out_frames });
     try std.testing.expect(read_frames <= frames.len);
 
     var combined_image_storage: []u8 = try allocator.alloc(u8, out_frames * max_height * max_width);
@@ -225,7 +268,7 @@ fn outputFrames(allocator: std.mem.Allocator, file: std.fs.File, offset: u32, pa
                 write_block(o.transpose.cols, o.transpose.rows, frames, frames_perm, combined_image_storage[frames_done * max_height * max_width .. (frames_done + frames_to_do) * max_height * max_width]);
                 frames_done += frames_to_do;
                 result_rows += o.transpose.cols;
-                std.debug.print("frames done: {d}, frames to do: {d}, rows done: {d}\n", .{ frames_done, frames_to_do, result_rows });
+                // std.debug.print("frames done: {d}, frames to do: {d}, rows done: {d}\n", .{ frames_done, frames_to_do, result_rows });
             },
             .replicate => {
                 if (result_cols == 0 or result_cols == o.replicate.times) {
@@ -236,10 +279,10 @@ fn outputFrames(allocator: std.mem.Allocator, file: std.fs.File, offset: u32, pa
                 const frames_perm = try replicate(allocator, o.replicate.items, o.replicate.times, frames_done);
                 defer allocator.free(frames_perm);
                 const frames_to_do: usize = o.replicate.items * o.replicate.times;
-                for (frames_perm) |f| {
-                    std.debug.print("{d} ", .{f});
-                }
-                std.debug.print("\n", .{});
+                // for (frames_perm) |f| {
+                //     std.debug.print("{d} ", .{f});
+                // }
+                // std.debug.print("\n", .{});
                 write_block(o.replicate.items, o.replicate.times, frames, frames_perm, combined_image_storage[frames_done * max_height * max_width .. (frames_done + frames_to_do) * max_height * max_width]);
                 result_rows += o.replicate.items;
                 frames_done += o.replicate.items * o.replicate.times;
@@ -253,7 +296,13 @@ fn outputFrames(allocator: std.mem.Allocator, file: std.fs.File, offset: u32, pa
         combined_image.pixels.indexed8.palette[i] = palette[i];
     }
     for (0..(out_frames * max_width * max_height)) |i| {
-        combined_image.pixels.indexed8.indices[i] = combined_image_storage[i];
+        var target_color = combined_image_storage[i];
+        if (target_color >= remap_colors_from and target_color < remap_colors_from + remap_colors_n) {
+            target_color = target_color - remap_colors_from + remap_colors_to;
+        } else if (target_color == 1) {
+            target_color = 96;
+        }
+        combined_image.pixels.indexed8.indices[i] = target_color;
     }
 
     const dir = "C:/Projects";
@@ -343,7 +392,7 @@ fn readSpriteSheet(frames_allocator: std.mem.Allocator, file: std.fs.File, offse
     const frames_num: u16 = try data.readInt(u16, .little);
 
     try data.skipBytes(frames_start - 26, .{});
-    std.debug.print("Frames start: {X}, frames num: {d}, jump: {x}\n", .{ frames_start, frames_num, frames_start - 26 });
+    // std.debug.print("Frames start: {X}, frames num: {d}, jump: {x}\n", .{ frames_start, frames_num, frames_start - 26 });
 
     var frames: []Frame = try frames_allocator.alloc(Frame, frames_num);
 
@@ -358,7 +407,7 @@ fn readSpriteSheet(frames_allocator: std.mem.Allocator, file: std.fs.File, offse
 
             const height: u16 = try data.readInt(u16, .little);
             const width: u16 = try data.readInt(u16, .little);
-            std.debug.print("Frame {d}: width: {d}, height: {d}\n", .{ i, width, height });
+            // std.debug.print("Frame {d}: width: {d}, height: {d}\n", .{ i, width, height });
             var pixels: []u8 = try frames_allocator.alloc(u8, width * height);
             {
                 var j: usize = 0;
