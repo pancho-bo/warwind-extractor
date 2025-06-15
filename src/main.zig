@@ -1,5 +1,3 @@
-const Frame = struct { width: u16, height: u16, pixels: []u8 };
-
 pub fn main() !void {
     // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
     std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
@@ -72,8 +70,8 @@ pub fn main() !void {
         while (i < num_nodes) : (i += 1) {
             const next_node_position: u32 = try data.readInt(u32, .little);
             index[i] = next_node_position;
-            try stdout.print("Node {d}: next node position: {X}\n", .{ i, next_node_position });
-            try bw.flush(); // Don't forget to flush!
+            // try stdout.print("Node {d}: next node position: {X}\n", .{ i, next_node_position });
+            // try bw.flush(); // Don't forget to flush!
             // try data.skipBytes(next_node_position - current_position, .{});
         }
     }
@@ -101,7 +99,98 @@ pub fn main() !void {
         }
     }
 
-    //*   Output palette *//
+    // const ops = [_]FramesBlockOperation{ FramesBlockOperation{ .transpose = Transpose{ .rows = 5, .cols = 4 } }, FramesBlockOperation{ .transpose = Transpose{ .rows = 5, .cols = 4 } }, FramesBlockOperation{ .replicate = Replicate{ .items = 4, .times = 5 } } };
+    // try outputFrames(allocator, file, index[3], palette, &ops, "coast", 88, 88, 8);
+
+    try doUnits(allocator, file, index, palette);
+}
+
+const FrameIterator = struct {
+    i: usize,
+    frames: []Frame,
+    nextChunk: ?*FrameChunk = null,
+    perm: ?[]usize = null,
+    replicate: ?usize = null,
+    j: usize,
+    const Self = @This();
+
+    pub fn next(self: *Self) ?Frame {
+        if (self.i < self.frames.len) {
+            //Don't know how to do it without function overrides
+            if (self.replicate) |r| {
+                defer {
+                    self.j += 1;
+                    if (self.j == r) {
+                        self.j = 0;
+                        self.i += 1;
+                    }
+                }
+                if (self.perm) |p| {
+                    return self.frames[p[self.i]];
+                } else {
+                    // std.debug.print("Getting replicated frame {d} times: {d}\n", .{ self.i, self.j });
+                    return self.frames[self.i];
+                }
+            } else {
+                defer self.i += 1;
+
+                if (self.perm) |p| {
+                    return self.frames[p[self.i]];
+                } else {
+                    return self.frames[self.i];
+                }
+            }
+        } else {
+            if (self.nextChunk) |c| {
+                return c.frames[0]; //Replace iterator
+            } else {
+                return null;
+            }
+        }
+    }
+};
+
+const FrameChunk = struct {
+    cols: usize,
+    rows: usize,
+    frame_w: usize,
+    frame_h: usize,
+    frames: []Frame,
+    perm: ?[]usize = null,
+    repl_n: ?usize = null,
+    len: usize,
+
+    pub fn iterate(self: *FrameChunk) FrameIterator {
+        return FrameIterator{ .i = 0, .frames = self.frames, .perm = self.perm, .j = 0, .replicate = self.repl_n };
+    }
+
+    pub fn slice(self: *FrameChunk, from: usize, to: usize) void {
+        self.frames = self.frames[from..to];
+        self.len = to - from;
+    }
+
+    fn transpose(self: *FrameChunk, allocator: std.mem.Allocator, rows: usize, cols: usize) ![]usize {
+        var result: []usize = try allocator.alloc(usize, rows * cols);
+        var i: usize = 0;
+        while (i < cols) : (i += 1) {
+            var j: usize = 0;
+            while (j < rows) : (j += 1) {
+                result[rows * i + j] = j * cols + i;
+            }
+        }
+        self.perm = result;
+        return result;
+    }
+
+    fn replicate(self: *FrameChunk, times: usize) void {
+        self.repl_n = times;
+        self.len = self.len * times;
+    }
+};
+const Frame = struct { width: u16, height: u16, pixels: []u8 };
+
+fn outputPalette(allocator: std.mem.Allocator, palette: []zigimg.color.Rgba32, stdout: std.io.Writer) void {
+    // *   Output palette *//
     {
         var image = try zigimg.Image.fromRawPixels(allocator, 16, 16, @ptrCast(&palette), .rgba32);
         defer image.deinit();
@@ -116,46 +205,47 @@ pub fn main() !void {
                 }
                 try stdout.print("\n", .{});
             }
-            try bw.flush(); // Don't forget to flush!
         }
         try image.writeToFilePath("C:/Projects/p1.png", .{ .png = .{} });
     }
+}
 
+fn doUnits(allocator: std.mem.Allocator, file: std.fs.File, index: []u32, palette: [256]zigimg.color.Rgba32) !void {
     const ops = [_]FramesBlockOperation{ FramesBlockOperation{ .transpose = Transpose{ .rows = 5, .cols = 4 } }, FramesBlockOperation{ .transpose = Transpose{ .rows = 5, .cols = 4 } }, FramesBlockOperation{ .replicate = Replicate{ .items = 4, .times = 5 } } };
     try outputFrames(allocator, file, index[40], palette, &ops, "minister", 88, 88, 8);
-    try outputFrames(allocator, file, index[41], palette, &ops, "servant", 88, 88, 8);
-    try outputFrames(allocator, file, index[42], palette, &ops, "rover", 88, 88, 8);
-    try outputFrames(allocator, file, index[43], palette, &ops, "rogue", 88, 88, 8);
-    try outputFrames(allocator, file, index[44], palette, &ops, "executioner", 88, 88, 8);
-    try outputFrames(allocator, file, index[45], palette, &ops, "psychic", 88, 88, 8);
+    // try outputFrames(allocator, file, index[41], palette, &ops, "servant", 88, 88, 8);
+    // try outputFrames(allocator, file, index[42], palette, &ops, "rover", 88, 88, 8);
+    // try outputFrames(allocator, file, index[43], palette, &ops, "rogue", 88, 88, 8);
+    // try outputFrames(allocator, file, index[44], palette, &ops, "executioner", 88, 88, 8);
+    // try outputFrames(allocator, file, index[45], palette, &ops, "psychic", 88, 88, 8);
 
-    try outputFrames(allocator, file, index[58], palette, &ops, "dancer", 80, 88, 8);
-    try outputFrames(allocator, file, index[59], palette, &ops, "initiate", 80, 88, 8);
-    try outputFrames(allocator, file, index[60], palette, &ops, "cavalier", 80, 88, 8);
-    try outputFrames(allocator, file, index[61], palette, &ops, "disciple", 80, 88, 8);
-    try outputFrames(allocator, file, index[62], palette, &ops, "defender", 80, 88, 8);
-    try outputFrames(allocator, file, index[63], palette, &ops, "shaman", 80, 88, 8);
+    // try outputFrames(allocator, file, index[58], palette, &ops, "dancer", 80, 88, 8);
+    // try outputFrames(allocator, file, index[59], palette, &ops, "initiate", 80, 88, 8);
+    // try outputFrames(allocator, file, index[60], palette, &ops, "cavalier", 80, 88, 8);
+    // try outputFrames(allocator, file, index[61], palette, &ops, "disciple", 80, 88, 8);
+    // try outputFrames(allocator, file, index[62], palette, &ops, "defender", 80, 88, 8);
+    // try outputFrames(allocator, file, index[63], palette, &ops, "shaman", 80, 88, 8);
 
-    try outputFrames(allocator, file, index[58], palette, &ops, "dancer", 80, 88, 8);
-    try outputFrames(allocator, file, index[59], palette, &ops, "initiate", 80, 88, 8);
-    try outputFrames(allocator, file, index[60], palette, &ops, "cavalier", 80, 88, 8);
-    try outputFrames(allocator, file, index[61], palette, &ops, "disciple", 80, 88, 8);
-    try outputFrames(allocator, file, index[62], palette, &ops, "defender", 80, 88, 8);
-    try outputFrames(allocator, file, index[63], palette, &ops, "shaman", 80, 88, 8);
+    // try outputFrames(allocator, file, index[58], palette, &ops, "dancer", 80, 88, 8);
+    // try outputFrames(allocator, file, index[59], palette, &ops, "initiate", 80, 88, 8);
+    // try outputFrames(allocator, file, index[60], palette, &ops, "cavalier", 80, 88, 8);
+    // try outputFrames(allocator, file, index[61], palette, &ops, "disciple", 80, 88, 8);
+    // try outputFrames(allocator, file, index[62], palette, &ops, "defender", 80, 88, 8);
+    // try outputFrames(allocator, file, index[63], palette, &ops, "shaman", 80, 88, 8);
 
-    try outputFrames(allocator, file, index[94], palette, &ops, "primemaker", 240, 88, 8);
-    try outputFrames(allocator, file, index[95], palette, &ops, "scrub", 240, 88, 8);
-    try outputFrames(allocator, file, index[96], palette, &ops, "weed", 240, 88, 8);
-    try outputFrames(allocator, file, index[97], palette, &ops, "scout", 240, 88, 8);
-    try outputFrames(allocator, file, index[98], palette, &ops, "squire", 240, 88, 8);
-    try outputFrames(allocator, file, index[99], palette, &ops, "druid", 240, 88, 8);
+    // try outputFrames(allocator, file, index[94], palette, &ops, "primemaker", 240, 88, 8);
+    // try outputFrames(allocator, file, index[95], palette, &ops, "scrub", 240, 88, 8);
+    // try outputFrames(allocator, file, index[96], palette, &ops, "weed", 240, 88, 8);
+    // try outputFrames(allocator, file, index[97], palette, &ops, "scout", 240, 88, 8);
+    // try outputFrames(allocator, file, index[98], palette, &ops, "squire", 240, 88, 8);
+    // try outputFrames(allocator, file, index[99], palette, &ops, "druid", 240, 88, 8);
 
-    try outputFrames(allocator, file, index[88], palette, &ops, "general", 64, 88, 8);
-    try outputFrames(allocator, file, index[89], palette, &ops, "worker", 64, 88, 8);
-    try outputFrames(allocator, file, index[90], palette, &ops, "biker", 64, 88, 8);
-    try outputFrames(allocator, file, index[91], palette, &ops, "agent", 64, 88, 8);
-    try outputFrames(allocator, file, index[92], palette, &ops, "veteran", 64, 88, 8);
-    try outputFrames(allocator, file, index[93], palette, &ops, "sorcerer", 64, 88, 8);
+    // try outputFrames(allocator, file, index[88], palette, &ops, "general", 64, 88, 8);
+    // try outputFrames(allocator, file, index[89], palette, &ops, "worker", 64, 88, 8);
+    // try outputFrames(allocator, file, index[90], palette, &ops, "biker", 64, 88, 8);
+    // try outputFrames(allocator, file, index[91], palette, &ops, "agent", 64, 88, 8);
+    // try outputFrames(allocator, file, index[92], palette, &ops, "veteran", 64, 88, 8);
+    // try outputFrames(allocator, file, index[93], palette, &ops, "sorcerer", 64, 88, 8);
 
     // try outputFrames(allocator, file, index[46], palette, &ops, "general", 56, 88, 8);
     // try outputFrames(allocator, file, index[47], palette, &ops, "worker", 56, 88, 8);
@@ -164,8 +254,8 @@ pub fn main() !void {
     // try outputFrames(allocator, file, index[50], palette, &ops, "veteran", 56, 88, 8);
     // try outputFrames(allocator, file, index[51], palette, &ops, "sorcerer", 56, 88, 8);
 
-    try outputFrames(allocator, file, index[66], palette, &ops, "primeminister", 88, 88, 8);
-    try outputFrames(allocator, file, index[64], palette, &ops, "primeminister", 88, 88, 8);
+    // try outputFrames(allocator, file, index[66], palette, &ops, "primeminister", 88, 88, 8);
+    // try outputFrames(allocator, file, index[64], palette, &ops, "primeminister", 88, 88, 8);
 }
 
 const Transpose = struct { rows: usize, cols: usize };
@@ -247,7 +337,7 @@ fn outputFrames(allocator: std.mem.Allocator, file: std.fs.File, offset: u32, pa
     // std.debug.print("operations on {d} frames, output {d} frames\n", .{ read_frames, out_frames });
     try std.testing.expect(read_frames <= frames.len);
 
-    var combined_image_storage: []u8 = try allocator.alloc(u8, out_frames * max_height * max_width);
+    const combined_image_storage: []u8 = try allocator.alloc(u8, out_frames * max_height * max_width);
     defer allocator.free(combined_image_storage);
     @memset(combined_image_storage, 0);
 
@@ -262,13 +352,19 @@ fn outputFrames(allocator: std.mem.Allocator, file: std.fs.File, offset: u32, pa
                 } else {
                     return error.ResultColumnsVaries;
                 }
-                const frames_perm = try transpose(allocator, o.transpose.rows, o.transpose.cols, frames_done);
-                defer allocator.free(frames_perm);
+                // const frames_perm = try transpose(allocator, o.transpose.rows, o.transpose.cols, frames_done);
+                // defer allocator.free(frames_perm);
                 const frames_to_do: usize = o.transpose.cols * o.transpose.rows;
-                write_block(o.transpose.cols, o.transpose.rows, frames, frames_perm, combined_image_storage[frames_done * max_height * max_width .. (frames_done + frames_to_do) * max_height * max_width]);
+                // write_block(o.transpose.cols, o.transpose.rows, frames, frames_perm, combined_image_storage[frames_done * max_height * max_width .. (frames_done + frames_to_do) * max_height * max_width]);
+                var chunk = try to_chunk(allocator, frames);
+                defer allocator.destroy(chunk);
+                chunk.slice(frames_done, frames_done + frames_to_do);
+                const frames_perm = try chunk.transpose(allocator, o.transpose.rows, o.transpose.cols);
+                defer allocator.free(frames_perm);
+                write_chunk(chunk, combined_image_storage, o.transpose.rows, frames_done);
                 frames_done += frames_to_do;
                 result_rows += o.transpose.cols;
-                // std.debug.print("frames done: {d}, frames to do: {d}, rows done: {d}\n", .{ frames_done, frames_to_do, result_rows });
+                std.debug.print("frames done: {d}, frames to do: {d}, rows done: {d}\n", .{ frames_done, frames_to_do, result_rows });
             },
             .replicate => {
                 if (result_cols == 0 or result_cols == o.replicate.times) {
@@ -276,14 +372,12 @@ fn outputFrames(allocator: std.mem.Allocator, file: std.fs.File, offset: u32, pa
                 } else {
                     return error.ResultColumnsVaries;
                 }
-                const frames_perm = try replicate(allocator, o.replicate.items, o.replicate.times, frames_done);
-                defer allocator.free(frames_perm);
-                const frames_to_do: usize = o.replicate.items * o.replicate.times;
-                // for (frames_perm) |f| {
-                //     std.debug.print("{d} ", .{f});
-                // }
-                // std.debug.print("\n", .{});
-                write_block(o.replicate.items, o.replicate.times, frames, frames_perm, combined_image_storage[frames_done * max_height * max_width .. (frames_done + frames_to_do) * max_height * max_width]);
+                var chunk = try to_chunk(allocator, frames);
+                defer allocator.destroy(chunk);
+                chunk.slice(frames_done, frames_done + o.replicate.items);
+                std.debug.print("Slicing for replicate: from {d} to {d} times: {d}\n", .{ frames_done, frames_done + o.replicate.items, o.replicate.times });
+                chunk.replicate(o.replicate.times);
+                write_chunk(chunk, combined_image_storage, o.replicate.times, frames_done);
                 result_rows += o.replicate.items;
                 frames_done += o.replicate.items * o.replicate.times;
             },
@@ -311,28 +405,48 @@ fn outputFrames(allocator: std.mem.Allocator, file: std.fs.File, offset: u32, pa
     try combined_image.writeToFilePath(outfile, .{ .png = .{} });
 }
 
-fn write_block(result_rows: usize, result_cols: usize, frames: []Frame, frames_perm: []usize, storage: []u8) void {
+fn to_chunk(allocator: std.mem.Allocator, frames: []Frame) !*FrameChunk {
     var max_width: usize = 0;
     var max_height: usize = 0;
     for (frames) |f| {
         if (f.height > max_height) max_height = f.height;
         if (f.width > max_width) max_width = f.width;
     }
+    const chunk = try allocator.create(FrameChunk);
+    chunk.* = FrameChunk{ .rows = frames.len, .cols = 1, .frame_h = max_height, .frame_w = max_width, .frames = frames, .len = frames.len };
+    return chunk;
+}
 
-    for (0..result_rows) |i| {
-        for (0..result_cols) |j| {
-            const source_frame = frames[frames_perm[i * result_cols + j]];
-            const frame_offset_w: usize = (max_width - source_frame.width) / 2;
-            const frame_offset_h: usize = (max_height - source_frame.height) / 2;
+fn write_chunk(chunk: *FrameChunk, storage: []u8, cols: usize, offset_frames: usize) void {
+    const start_row = offset_frames / cols;
+    const end_row = (offset_frames + chunk.len) / cols;
+
+    var frame_iterator = chunk.iterate();
+
+    // const start_offset_px = start_row * cols * chunk.frame_h * chunk.frame_w;
+    // const start_offset_px = i * chunk.frame_h * chunk.frame_w + start_col * chunk.frame_w;
+    for (start_row..end_row) |i| {
+        const start_col: usize = if (i == start_row) offset_frames % cols else 0;
+        var end_col: usize = cols;
+        if (i == end_row - 1) {
+            const rem = (offset_frames + chunk.len) % cols;
+            if (rem != 0) end_col = rem;
+        }
+
+        for (start_col..end_col) |j| {
+            // std.debug.print("Put frame {d}:{d}, frame size: {d}x{d}\n", .{ i, j, chunk.frame_w, chunk.frame_h });
+            const source_frame = frame_iterator.next().?;
+            const frame_offset_w: usize = (chunk.frame_w - source_frame.width) / 2;
+            const frame_offset_h: usize = (chunk.frame_h - source_frame.height) / 2;
             for (0..source_frame.height) |h| {
                 for (0..source_frame.width) |w| {
-                    const combined_image_storage_offset_h: usize = max_width * result_cols * (i * max_height + h + frame_offset_h);
-                    const combined_image_storage_offset_w: usize = j * max_width + w + frame_offset_w;
+                    const combined_image_storage_offset_h: usize = chunk.frame_w * cols * (i * chunk.frame_h + h + frame_offset_h);
+                    const combined_image_storage_offset_w: usize = j * chunk.frame_w + w + frame_offset_w;
                     // const combined_image_storage_offset: usize = i * 5 * max_height * max_width + j * max_width + (h + frame_offset_h) * max_width + w + frame_offset_w;
                     const combined_image_storage_offset: usize = combined_image_storage_offset_h + combined_image_storage_offset_w;
                     const target_frame_offset = h * source_frame.width + w;
-                    // if (i == 0 and j == 0) {
-                    //     std.debug.print("frame {d}:{d}, size: {d}x{d}, offsets: {d}:{d}, put: {d}:{d} => {d}:{d} \n", .{ i, j, target_frame.height, target_frame.width, frame_offset_h, frame_offset_w, h, w, combined_image_storage_offset_h, combined_image_storage_offset_w });
+                    // if (i == 4 and j == 0 and h < 10) {
+                    // std.debug.print("frame {d}:{d}, size: {d}x{d}, offsets: {d}:{d}, put: {d}:{d} => {d}:{d}, total offset: {d} \n", .{ i, j, source_frame.height, source_frame.width, frame_offset_h, frame_offset_w, h, w, combined_image_storage_offset_h, combined_image_storage_offset_w, combined_image_storage_offset });
                     // }
                     storage[combined_image_storage_offset] = source_frame.pixels[target_frame_offset];
                 }
@@ -341,15 +455,15 @@ fn write_block(result_rows: usize, result_cols: usize, frames: []Frame, frames_p
     }
 }
 
-fn replicate(allocator: std.mem.Allocator, items: usize, cols: usize, offset: usize) ![]usize {
-    var result: []usize = try allocator.alloc(usize, items * cols);
-    for (0..items) |i| {
-        for (0..cols) |c| {
-            result[cols * i + c] = i + offset;
-        }
-    }
-    return result;
-}
+// fn replicate(allocator: std.mem.Allocator, items: usize, cols: usize, offset: usize) ![]usize {
+//     var result: []usize = try allocator.alloc(usize, items * cols);
+//     for (0..items) |i| {
+//         for (0..cols) |c| {
+//             result[cols * i + c] = i + offset;
+//         }
+//     }
+//     return result;
+// }
 
 fn transpose(allocator: std.mem.Allocator, rows: usize, cols: usize, offset: usize) ![]usize {
     var result: []usize = try allocator.alloc(usize, rows * cols);
