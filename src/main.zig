@@ -3,7 +3,7 @@
 // const ChunkL = struct { source: []const u8, transform: []FramesBlockOperation, color_remap: ColorRemap, write_offset: usize };
 // const ColorRemap = struct { from_base: usize, to_base: usize, colors: usize };
 
-pub fn sprite_sheet(lua: *Lua) !i32 {
+pub fn spriteSheet(lua: *Lua) !i32 {
     errdefer {
         const message = lua.toString(-1) catch "Can't get error from lua";
         std.debug.print("{s}", .{message});
@@ -78,7 +78,7 @@ pub fn main() !void {
 
     lua.openTable();
     // lua.autoPushFunction(sprite_sheet);
-    lua.pushFunction(zlua.wrap(sprite_sheet));
+    lua.pushFunction(zlua.wrap(spriteSheet));
     lua.setGlobal("SpriteSheet");
 
     {
@@ -158,14 +158,15 @@ pub fn main() !void {
 
     // try doUnits(allocator, file, index, palette);
 
-    const ops = [_]FramesBlockOperation{FramesBlockOperation{ .copy = Copy{ .items = 4 } }};
+    const ops = [_]FrameBlockOp{FrameBlockOp{ .copy = .{ .items = 4 } }};
     // allocate pixels, how to get size???
     // sprite_sheet(name, w, h).from[frames(at_index)(+w,+h).chunks[], frames[at_index](+w, +h).chunks[]]
     //(read frames(+fsize), apply ops(+image_len) => chunk), write_chunk at offset(+image_size), write_pixels, write image
-    const spriteSheet = try outputFrames(allocator, file, index[3], &ops, .{ .from = 88, .to = 88, .n = 8 }, 16, 64);
-    defer allocator.free(spriteSheet.pixels);
+    const indices = [_]u32{ index[3], index[7], index[8], index[9], index[10], index[11], index[12] };
+    const sprite_sheet = try outputFrames(allocator, file, indices[0..], &ops, .{ .from = 88, .to = 88, .n = 8 }, 16, 64);
+    defer allocator.free(sprite_sheet.pixels);
 
-    try write_image(allocator, "coast", spriteSheet.width, spriteSheet.height, palette[0..256], spriteSheet.pixels);
+    try writeImage(allocator, "coast", sprite_sheet.width, sprite_sheet.height, palette[0..256], sprite_sheet.pixels);
 
     // var chunk: FrameChunk = read_frames();
     // ops.
@@ -283,7 +284,7 @@ const FrameChunk = struct {
 const Frame = struct { width: u16, height: u16, pixels: []u8 };
 
 fn doUnits(allocator: std.mem.Allocator, file: std.fs.File, index: []u32, palette: [256]zigimg.color.Rgba32) !void {
-    const ops = [_]FramesBlockOperation{ FramesBlockOperation{ .transpose = Transpose{ .rows = 5, .cols = 4 } }, FramesBlockOperation{ .transpose = Transpose{ .rows = 5, .cols = 4 } }, FramesBlockOperation{ .replicate = Replicate{ .items = 4, .times = 5 } } };
+    const ops = [_]FrameBlockOp{ FrameBlockOp{ .transpose = Transpose{ .rows = 5, .cols = 4 } }, FrameBlockOp{ .transpose = Transpose{ .rows = 5, .cols = 4 } }, FrameBlockOp{ .replicate = Replicate{ .items = 4, .times = 5 } } };
     try outputFrames(allocator, file, index[40], palette, &ops, "minister", .{ .from = 88, .to = 88, .n = 8 }, 5, 0);
     try outputFrames(allocator, file, index[41], palette, &ops, "servant", .{ .from = 88, .to = 88, .n = 8 }, 5, 0);
     try outputFrames(allocator, file, index[42], palette, &ops, "rover", .{ .from = 88, .to = 88, .n = 8 }, 5, 0);
@@ -336,23 +337,33 @@ const Replicate = struct { items: usize, times: usize };
 
 const Copy = struct { items: usize };
 
-const FramesBlockOperation = union(enum) { transpose: Transpose, replicate: Replicate, copy: Copy };
+const FrameBlockOp = union(enum) { transpose: Transpose, replicate: Replicate, copy: Copy };
 
 const RemapColors = struct { from: u8, to: u8, n: u8 };
 
 const SpriteSheet = struct { width: usize, height: usize, pixels: []u8 };
 
-fn outputFrames(allocator: std.mem.Allocator, file: std.fs.File, offset: u32, operations: []const FramesBlockOperation, remap_colors: RemapColors, output_cols: usize, out_image_frames: usize) !SpriteSheet {
+fn outputFrames(
+    allocator: std.mem.Allocator,
+    file: std.fs.File,
+    read_indicies: []const u32,
+    operations: []const FrameBlockOp,
+    remap_colors: RemapColors,
+    output_cols: usize,
+    out_image_frames: usize,
+) !SpriteSheet {
 
     //*   Read sprite sheet format: *//
     var frames_arena_allocator = std.heap.ArenaAllocator.init(allocator);
     const frames_allocator = frames_arena_allocator.allocator();
+    defer frames_arena_allocator.deinit();
 
-    const frames: []Frame = try readSpriteSheet(frames_allocator, file, offset);
+    const frameSet: [][]Frame = try frames_allocator.alloc([]Frame, read_indicies.len);
+    for (read_indicies, 0..) |offset, i| {
+        frameSet[i] = try readFrames(frames_allocator, file, offset);
+    }
 
     // const frames_alt: []Frame = try readSpriteSheet(frames_allocator, file, index[98]);
-
-    defer frames_arena_allocator.deinit();
 
     // {
     //     const frame: usize = 0;
@@ -391,78 +402,90 @@ fn outputFrames(allocator: std.mem.Allocator, file: std.fs.File, offset: u32, op
 
     var max_width: usize = 0;
     var max_height: usize = 0;
-    for (frames) |f| {
-        if (f.height > max_height) max_height = f.height;
-        if (f.width > max_width) max_width = f.width;
+    for (frameSet) |frames| {
+        for (frames) |f| {
+            if (f.height > max_height) max_height = f.height;
+            if (f.width > max_width) max_width = f.width;
+        }
     }
-    std.debug.print("frames: {d}, frame size: {d}x{d}\n", .{ frames.len, max_width, max_height });
+    std.debug.print("frameSets: {d}, frame size: {d}x{d}\n", .{ frameSet.len, max_width, max_height });
 
     //Compute how many frames we should read and output, for proper memory allocation
     var out_frames: usize = 0;
-    var read_frames: usize = 0;
-    for (operations) |o| {
-        switch (o) {
-            .transpose => {
-                out_frames += o.transpose.cols * o.transpose.rows;
-                read_frames += o.transpose.cols * o.transpose.rows;
-            },
-            .replicate => {
-                out_frames += o.replicate.items * o.replicate.times;
-                read_frames += o.replicate.items;
-            },
-            .copy => {
-                out_frames += o.copy.items;
-                read_frames += o.copy.items;
-            },
+    {
+        for (frameSet) |frames| {
+            var read_frames: usize = 0;
+            for (operations) |o| {
+                switch (o) {
+                    .transpose => {
+                        out_frames += o.transpose.cols * o.transpose.rows;
+                        read_frames += o.transpose.cols * o.transpose.rows;
+                    },
+                    .replicate => {
+                        out_frames += o.replicate.items * o.replicate.times;
+                        read_frames += o.replicate.items;
+                    },
+                    .copy => {
+                        out_frames += o.copy.items;
+                        read_frames += o.copy.items;
+                    },
+                }
+            }
+            try std.testing.expect(read_frames <= frames.len);
         }
+        if (out_image_frames > out_frames) {
+            out_frames = out_image_frames;
+        }
+        // std.debug.print("operations on {d} frames, output {d} frames\n", .{ read_frames, out_frames });
     }
-    if (out_image_frames > out_frames) {
-        out_frames = out_image_frames;
-    }
-    // std.debug.print("operations on {d} frames, output {d} frames\n", .{ read_frames, out_frames });
-    try std.testing.expect(read_frames <= frames.len);
 
     const combined_image_storage: []u8 = try allocator.alloc(u8, out_frames * max_height * max_width);
     @memset(combined_image_storage, 0);
 
-    var frames_done: usize = 0;
+    var cursor: usize = 0;
     var result_rows: usize = 0;
-    for (operations) |o| {
-        switch (o) {
-            .transpose => {
-                // const frames_perm = try transpose(allocator, o.transpose.rows, o.transpose.cols, frames_done);
-                // defer allocator.free(frames_perm);
-                const frames_to_do: usize = o.transpose.cols * o.transpose.rows;
-                // write_block(o.transpose.cols, o.transpose.rows, frames, frames_perm, combined_image_storage[frames_done * max_height * max_width .. (frames_done + frames_to_do) * max_height * max_width]);
-                var chunk = try as_chunk(allocator, frames);
-                defer allocator.destroy(chunk);
-                chunk.slice(frames_done, frames_done + frames_to_do);
-                const frames_perm = try chunk.transpose(allocator, o.transpose.rows, o.transpose.cols);
-                defer allocator.free(frames_perm);
-                write_chunk(chunk, combined_image_storage, output_cols, frames_done);
-                frames_done += frames_to_do;
-                result_rows += o.transpose.cols;
-                std.debug.print("frames done: {d}, frames to do: {d}, rows done: {d}\n", .{ frames_done, frames_to_do, result_rows });
-            },
-            .replicate => {
-                var chunk = try as_chunk(allocator, frames);
-                defer allocator.destroy(chunk);
-                chunk.slice(frames_done, frames_done + o.replicate.items);
-                std.debug.print("Slicing for replicate: from {d} to {d} times: {d}\n", .{ frames_done, frames_done + o.replicate.items, o.replicate.times });
-                chunk.replicate(o.replicate.times);
-                write_chunk(chunk, combined_image_storage, output_cols, frames_done);
-                result_rows += o.replicate.items;
-                frames_done += o.replicate.items * o.replicate.times;
-            },
-            .copy => {
-                var chunk = try as_chunk(allocator, frames);
-                defer allocator.destroy(chunk);
-                chunk.slice(frames_done, frames_done + o.copy.items);
-                std.debug.print("Slicing for copy: from {d} to {d}\n", .{ frames_done, frames_done + o.copy.items });
-                write_chunk(chunk, combined_image_storage, output_cols, frames_done);
-                result_rows += ((frames_done + o.copy.items) / output_cols) - (frames_done / output_cols);
-                frames_done += o.copy.items;
-            },
+    for (frameSet) |frames| {
+        var frames_done: usize = 0;
+        for (operations) |o| {
+            switch (o) {
+                .transpose => {
+                    // const frames_perm = try transpose(allocator, o.transpose.rows, o.transpose.cols, frames_done);
+                    // defer allocator.free(frames_perm);
+                    const frames_to_do: usize = o.transpose.cols * o.transpose.rows;
+                    // write_block(o.transpose.cols, o.transpose.rows, frames, frames_perm, combined_image_storage[frames_done * max_height * max_width .. (frames_done + frames_to_do) * max_height * max_width]);
+                    var chunk = try as_chunk(allocator, frames);
+                    defer allocator.destroy(chunk);
+                    chunk.slice(frames_done, frames_done + frames_to_do);
+                    const frames_perm = try chunk.transpose(allocator, o.transpose.rows, o.transpose.cols);
+                    defer allocator.free(frames_perm);
+                    write_chunk(chunk, combined_image_storage, output_cols, cursor);
+                    frames_done += frames_to_do;
+                    result_rows += o.transpose.cols;
+                    cursor += frames_to_do;
+                    std.debug.print("frames done: {d}, frames to do: {d}, rows done: {d}\n", .{ frames_done, frames_to_do, result_rows });
+                },
+                .replicate => {
+                    var chunk = try as_chunk(allocator, frames);
+                    defer allocator.destroy(chunk);
+                    chunk.slice(frames_done, frames_done + o.replicate.items);
+                    std.debug.print("Slicing for replicate: from {d} to {d} times: {d}\n", .{ frames_done, frames_done + o.replicate.items, o.replicate.times });
+                    chunk.replicate(o.replicate.times);
+                    write_chunk(chunk, combined_image_storage, output_cols, cursor);
+                    result_rows += o.replicate.items;
+                    frames_done += o.replicate.items * o.replicate.times;
+                    cursor += o.replicate.items * o.replicate.times;
+                },
+                .copy => {
+                    var chunk = try as_chunk(allocator, frames);
+                    defer allocator.destroy(chunk);
+                    chunk.slice(frames_done, frames_done + o.copy.items);
+                    std.debug.print("Slicing for copy: from {d} to {d}\n", .{ frames_done, frames_done + o.copy.items });
+                    write_chunk(chunk, combined_image_storage, output_cols, cursor);
+                    result_rows += ((frames_done + o.copy.items) / output_cols) - (frames_done / output_cols);
+                    frames_done += o.copy.items;
+                    cursor += o.copy.items;
+                },
+            }
         }
     }
     if ((out_image_frames / output_cols) > result_rows) {
@@ -484,7 +507,7 @@ fn outputFrames(allocator: std.mem.Allocator, file: std.fs.File, offset: u32, op
     return SpriteSheet{ .width = max_width * output_cols, .height = max_height * result_rows, .pixels = combined_image_storage };
 }
 
-fn write_image(allocator: std.mem.Allocator, name: []const u8, width: usize, height: usize, palette: []zigimg.color.Rgba32, pixels: []u8) !void {
+fn writeImage(allocator: std.mem.Allocator, name: []const u8, width: usize, height: usize, palette: []zigimg.color.Rgba32, pixels: []u8) !void {
     var combined_image = try zigimg.Image.create(allocator, width, height, .indexed8);
     defer combined_image.deinit();
     @memcpy(combined_image.pixels.indexed8.palette, palette);
@@ -503,7 +526,14 @@ fn as_chunk(allocator: std.mem.Allocator, frames: []Frame) !*FrameChunk {
         if (f.width > max_width) max_width = f.width;
     }
     const chunk = try allocator.create(FrameChunk);
-    chunk.* = FrameChunk{ .rows = frames.len, .cols = 1, .frame_h = max_height, .frame_w = max_width, .frames = frames, .len = frames.len };
+    chunk.* = FrameChunk{
+        .rows = frames.len,
+        .cols = 1,
+        .frame_h = max_height,
+        .frame_w = max_width,
+        .frames = frames,
+        .len = frames.len,
+    };
     return chunk;
 }
 
@@ -567,7 +597,7 @@ test "traspose_test" {
     try std.testing.expect(std.mem.eql(usize, t2, &t1));
 }
 
-fn readSpriteSheet(frames_allocator: std.mem.Allocator, file: std.fs.File, offset: u32) ![]Frame {
+fn readFrames(frames_allocator: std.mem.Allocator, file: std.fs.File, offset: u32) ![]Frame {
     try file.seekTo(offset);
     const data = file.reader();
     std.debug.print("Reading sprite sheet at position {X}\n", .{offset});
