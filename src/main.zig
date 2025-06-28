@@ -1,8 +1,3 @@
-// const SpriteSheet = struct { name: []const u8, columns: usize, rows: usize, frames: []ChunkL };
-// const DatFile = struct { name: []const u8, offset: usize };
-// const ChunkL = struct { source: []const u8, transform: []FramesBlockOperation, color_remap: ColorRemap, write_offset: usize };
-// const ColorRemap = struct { from_base: usize, to_base: usize, colors: usize };
-
 pub fn spriteSheet(lua: *Lua) !i32 {
     errdefer {
         const message = lua.toString(-1) catch "Can't get error from lua";
@@ -53,6 +48,8 @@ pub fn spriteSheet(lua: *Lua) !i32 {
 //     return 0;
 // }
 
+const OpsOnIndex = struct { index: u32, ops: []const FrameBlockOp };
+
 pub fn main() !void {
     // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
     std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
@@ -77,7 +74,6 @@ pub fn main() !void {
     defer lua.deinit();
 
     lua.openTable();
-    // lua.autoPushFunction(sprite_sheet);
     lua.pushFunction(zlua.wrap(spriteSheet));
     lua.setGlobal("SpriteSheet");
 
@@ -97,7 +93,7 @@ pub fn main() !void {
     lua.pop(1);
 
     _ = try lua.getGlobal("Palette");
-    const palette_lua: usize = @intCast(try lua.toInteger(-1));
+    const palette_index: usize = @intCast(try lua.toInteger(-1));
     lua.pop(1);
 
     // _ = try lua.getGlobal("Rogue");
@@ -110,41 +106,17 @@ pub fn main() !void {
 
     // lua.rawGetIndex();
 
-    {
-        // var image = try zigimg.Image.fromFilePath(allocator, "C:/Projects/data.wwgus/graphics/missiles/ww/shamali_missile.png");
-        var image = try zigimg.Image.fromFilePath(allocator, image_path);
-        defer image.deinit();
-
-        try image.writeToFilePath("C:/Projects/out.png", .{ .png = .{} });
-    }
-
     const data_file_name = "C:/Program Files/GOG Galaxy/Games/War Wind/Data/RES.001";
 
     const file = try std.fs.cwd().openFile(data_file_name, .{ .mode = .read_only });
     defer file.close();
 
-    const data = file.reader();
-    const num_nodes = try data.readInt(u32, .little);
-
-    try stdout.print("Number of nodes: {d}\n", .{num_nodes});
-    try bw.flush(); // Don't forget to flush!
-
-    //*   Read index *//
-    var index: []u32 = try allocator.alloc(u32, num_nodes);
+    //Somehow it should be clear that index starts at file offset 0, maybe wrap it into struct D3GR with init?
+    const index: []u32 = try readIndex(allocator, file.reader());
     defer allocator.free(index);
 
-    {
-        var i: usize = 0;
-        while (i < num_nodes) : (i += 1) {
-            const next_node_position: u32 = try data.readInt(u32, .little);
-            index[i] = next_node_position;
-            // try stdout.print("Node {d}: next node position: {X}\n", .{ i, next_node_position });
-            // try bw.flush(); // Don't forget to flush!
-            // try data.skipBytes(next_node_position - current_position, .{});
-        }
-    }
-
-    const palette: []zigimg.color.Rgba32 = try readPalette(allocator, file, index[palette_lua]);
+    try file.seekTo(index[palette_index]);
+    const palette: []color.Rgba32 = try readPalette(allocator, file.reader());
     defer allocator.free(palette);
 
     // {
@@ -158,12 +130,40 @@ pub fn main() !void {
 
     // try doUnits(allocator, file, index, palette);
 
-    const ops = [_]FrameBlockOp{FrameBlockOp{ .copy = .{ .items = 4 } }};
+    const ops = [_]FrameBlockOp{.{ .copy = .{ .items = 4 } }};
     // allocate pixels, how to get size???
     // sprite_sheet(name, w, h).from[frames(at_index)(+w,+h).chunks[], frames[at_index](+w, +h).chunks[]]
     //(read frames(+fsize), apply ops(+image_len) => chunk), write_chunk at offset(+image_size), write_pixels, write image
-    const indices = [_]u32{ index[3], index[7], index[8], index[9], index[10], index[11], index[12] };
-    const sprite_sheet = try outputFrames(allocator, file, indices[0..], &ops, .{ .from = 88, .to = 88, .n = 8 }, 16, 64);
+
+    //indices point to images packed in a .RES file
+    const sources = [_]OpsOnIndex{
+        .{ .index = index[3], .ops = &ops },
+        .{ .index = index[7], .ops = &ops },
+        .{ .index = index[8], .ops = &ops },
+        .{ .index = index[9], .ops = &ops },
+        .{ .index = index[10], .ops = &ops },
+        .{ .index = index[11], .ops = &ops },
+        .{ .index = index[12], .ops = &ops },
+        .{ .index = index[13], .ops = &[_]FrameBlockOp{
+            .{ .copy = .{ .items = 34 } },
+            .{ .skip = .{ .items = 4 } },
+            .{ .copy = .{ .items = 17 } },
+        } },
+    };
+
+    var frames_arena_allocator = std.heap.ArenaAllocator.init(allocator);
+    defer frames_arena_allocator.deinit();
+    const frames_allocator = frames_arena_allocator.allocator();
+
+    //read frames
+    var transforms: []Transform = try frames_allocator.alloc(Transform, sources.len);
+    for (sources, 0..sources.len) |s, i| {
+        try file.seekTo(s.index);
+        transforms[i].frames = try readD3GR(frames_allocator, file.reader());
+        transforms[i].ops = s.ops;
+    }
+
+    const sprite_sheet = try outputFrames(allocator, transforms, .{ .from = 88, .to = 88, .n = 8 }, 16, 128);
     defer allocator.free(sprite_sheet.pixels);
 
     try writeImage(allocator, "coast", sprite_sheet.width, sprite_sheet.height, palette[0..256], sprite_sheet.pixels);
@@ -172,10 +172,27 @@ pub fn main() !void {
     // ops.
 }
 
-pub fn readPalette(allocator: std.mem.Allocator, file: std.fs.File, offset: usize) ![]zigimg.color.Rgba32 {
-    //*   Read palette *//
-    const data = file.reader();
-    try file.seekTo(offset);
+const Transform = struct {
+    frames: []const Frame,
+    ops: []const FrameBlockOp,
+};
+
+pub fn readIndex(a: std.mem.Allocator, data: std.fs.File.Reader) ![]u32 {
+    const num_nodes = try data.readInt(u32, .little);
+    std.debug.print("Number of nodes: {d}\n", .{num_nodes});
+    var index: []u32 = try a.alloc(u32, num_nodes);
+
+    for (0..num_nodes) |i| {
+        const next_node_position: u32 = try data.readInt(u32, .little);
+        index[i] = next_node_position;
+        // try stdout.print("Node {d}: next node position: {X}\n", .{ i, next_node_position });
+        // try bw.flush(); // Don't forget to flush!
+        // try data.skipBytes(next_node_position - current_position, .{});
+    }
+    return index;
+}
+
+pub fn readPalette(allocator: std.mem.Allocator, data: std.fs.File.Reader) ![]color.Rgba32 {
     const d3gr: [4]u8 = try data.readBytesNoEof(4);
     try std.testing.expect(std.mem.eql(u8, &d3gr, "D3GR"));
 
@@ -186,14 +203,14 @@ pub fn readPalette(allocator: std.mem.Allocator, file: std.fs.File, offset: usiz
     //read 12 bytes from the start already
     try data.skipBytes(palette_start - 12, .{});
 
-    const palette: []zigimg.color.Rgba32 = try allocator.alloc(zigimg.color.Rgba32, 256);
+    const palette: []zigimg.color.Rgba32 = try allocator.alloc(color.Rgba32, 256);
     {
         for (0..256) |i| {
             const r: u8 = try data.readByte() << 2;
             const g: u8 = try data.readByte() << 2;
             const b: u8 = try data.readByte() << 2;
             const a: u8 = if (i == 0) 0 else 0xff; // Zero color is transparent
-            palette[i] = zigimg.color.Rgba32.initRgba(@intCast(r), @intCast(g), @intCast(b), @intCast(a));
+            palette[i] = color.Rgba32.initRgba(@intCast(r), @intCast(g), @intCast(b), @intCast(a));
         }
     }
     return palette;
@@ -201,7 +218,7 @@ pub fn readPalette(allocator: std.mem.Allocator, file: std.fs.File, offset: usiz
 
 const FrameIterator = struct {
     i: usize,
-    frames: []Frame,
+    frames: []const Frame,
     nextChunk: ?*FrameChunk = null,
     perm: ?[]usize = null,
     replicate: ?usize = null,
@@ -249,7 +266,7 @@ const FrameChunk = struct {
     rows: usize,
     frame_w: usize,
     frame_h: usize,
-    frames: []Frame,
+    frames: []const Frame,
     perm: ?[]usize = null,
     repl_n: ?usize = null,
     len: usize,
@@ -283,7 +300,7 @@ const FrameChunk = struct {
 };
 const Frame = struct { width: u16, height: u16, pixels: []u8 };
 
-fn doUnits(allocator: std.mem.Allocator, file: std.fs.File, index: []u32, palette: [256]zigimg.color.Rgba32) !void {
+fn doUnits(allocator: std.mem.Allocator, file: std.fs.File, index: []u32, palette: [256]color.Rgba32) !void {
     const ops = [_]FrameBlockOp{ FrameBlockOp{ .transpose = Transpose{ .rows = 5, .cols = 4 } }, FrameBlockOp{ .transpose = Transpose{ .rows = 5, .cols = 4 } }, FrameBlockOp{ .replicate = Replicate{ .items = 4, .times = 5 } } };
     try outputFrames(allocator, file, index[40], palette, &ops, "minister", .{ .from = 88, .to = 88, .n = 8 }, 5, 0);
     try outputFrames(allocator, file, index[41], palette, &ops, "servant", .{ .from = 88, .to = 88, .n = 8 }, 5, 0);
@@ -336,86 +353,39 @@ const Transpose = struct { rows: usize, cols: usize };
 const Replicate = struct { items: usize, times: usize };
 
 const Copy = struct { items: usize };
+const Skip = struct { items: usize };
 
-const FrameBlockOp = union(enum) { transpose: Transpose, replicate: Replicate, copy: Copy };
+const FrameBlockOp = union(enum) { transpose: Transpose, replicate: Replicate, copy: Copy, skip: Skip };
 
 const RemapColors = struct { from: u8, to: u8, n: u8 };
 
 const SpriteSheet = struct { width: usize, height: usize, pixels: []u8 };
 
+const ReadFrames = struct { from: u32, ops: []FrameBlockOp };
+
 fn outputFrames(
     allocator: std.mem.Allocator,
-    file: std.fs.File,
-    read_indicies: []const u32,
-    operations: []const FrameBlockOp,
+    sources: []const Transform,
     remap_colors: RemapColors,
     output_cols: usize,
     out_image_frames: usize,
 ) !SpriteSheet {
-
-    //*   Read sprite sheet format: *//
-    var frames_arena_allocator = std.heap.ArenaAllocator.init(allocator);
-    const frames_allocator = frames_arena_allocator.allocator();
-    defer frames_arena_allocator.deinit();
-
-    const frameSet: [][]Frame = try frames_allocator.alloc([]Frame, read_indicies.len);
-    for (read_indicies, 0..) |offset, i| {
-        frameSet[i] = try readFrames(frames_allocator, file, offset);
-    }
-
-    // const frames_alt: []Frame = try readSpriteSheet(frames_allocator, file, index[98]);
-
-    // {
-    //     const frame: usize = 0;
-    //     var image = try zigimg.Image.create(allocator, frames[frame].width, frames[frame].height, .indexed8);
-    //     var image_alt = try zigimg.Image.create(allocator, frames_alt[frame].width, frames_alt[frame].height, .indexed8);
-    //     var image = try zigimg.Image.fromRawPixels(allocator, frames[0].width, frames[0].height, @ptrCast(pixels), .rgba32);
-    //     defer image.deinit();
-    //     defer image_alt.deinit();
-
-    //     for (0..palette.len) |i| {
-    //         image.pixels.indexed8.palette[i] = palette[i];
-    //     }
-    //     for (0..frames[frame].pixels.len) |i| {
-    //         image.pixels.indexed8.indices[i] = frames[frame].pixels[i];
-    //     }
-    //     for (0..palette.len) |i| {
-    //         image_alt.pixels.indexed8.palette[i] = palette[i];
-    //     }
-    //     for (0..frames[frame].pixels.len) |i| {
-    //         if (frames[frame].pixels[i] != frames_alt[frame].pixels[i]) {
-    //             image_alt.pixels.indexed8.indices[i] = frames_alt[frame].pixels[i];
-    //         } else {
-    //             image_alt.pixels.indexed8.indices[i] = 0;
-    //         }
-    //     }
-    //     for (image_alt.pixels.indexed8.indices) |i| {
-    //         if (i != 0) {
-    //             std.debug.print("{d}|", .{i});
-    //         }
-    //     }
-    //     std.debug.print("\n", .{});
-
-    //     try image.writeToFilePath("C:/Projects/rogue1.png", .{ .png = .{} });
-    //     try image_alt.writeToFilePath("C:/Projects/rogue2.png", .{ .png = .{} });
-    // }
-
     var max_width: usize = 0;
     var max_height: usize = 0;
-    for (frameSet) |frames| {
-        for (frames) |f| {
+    for (sources) |source| {
+        for (source.frames) |f| {
             if (f.height > max_height) max_height = f.height;
             if (f.width > max_width) max_width = f.width;
         }
     }
-    std.debug.print("frameSets: {d}, frame size: {d}x{d}\n", .{ frameSet.len, max_width, max_height });
+    std.debug.print("frameSets: {d}, frame size: {d}x{d}\n", .{ sources.len, max_width, max_height });
 
     //Compute how many frames we should read and output, for proper memory allocation
     var out_frames: usize = 0;
     {
-        for (frameSet) |frames| {
+        for (sources) |source| {
             var read_frames: usize = 0;
-            for (operations) |o| {
+            for (source.ops) |o| {
                 switch (o) {
                     .transpose => {
                         out_frames += o.transpose.cols * o.transpose.rows;
@@ -429,9 +399,12 @@ fn outputFrames(
                         out_frames += o.copy.items;
                         read_frames += o.copy.items;
                     },
+                    .skip => {
+                        read_frames += o.skip.items;
+                    },
                 }
             }
-            try std.testing.expect(read_frames <= frames.len);
+            try std.testing.expect(read_frames <= source.frames.len);
         }
         if (out_image_frames > out_frames) {
             out_frames = out_image_frames;
@@ -444,16 +417,16 @@ fn outputFrames(
 
     var cursor: usize = 0;
     var result_rows: usize = 0;
-    for (frameSet) |frames| {
+    for (sources) |source| {
         var frames_done: usize = 0;
-        for (operations) |o| {
+        for (source.ops) |o| {
             switch (o) {
                 .transpose => {
                     // const frames_perm = try transpose(allocator, o.transpose.rows, o.transpose.cols, frames_done);
                     // defer allocator.free(frames_perm);
                     const frames_to_do: usize = o.transpose.cols * o.transpose.rows;
                     // write_block(o.transpose.cols, o.transpose.rows, frames, frames_perm, combined_image_storage[frames_done * max_height * max_width .. (frames_done + frames_to_do) * max_height * max_width]);
-                    var chunk = try as_chunk(allocator, frames);
+                    var chunk = try as_chunk(allocator, source.frames);
                     defer allocator.destroy(chunk);
                     chunk.slice(frames_done, frames_done + frames_to_do);
                     const frames_perm = try chunk.transpose(allocator, o.transpose.rows, o.transpose.cols);
@@ -465,7 +438,7 @@ fn outputFrames(
                     std.debug.print("frames done: {d}, frames to do: {d}, rows done: {d}\n", .{ frames_done, frames_to_do, result_rows });
                 },
                 .replicate => {
-                    var chunk = try as_chunk(allocator, frames);
+                    var chunk = try as_chunk(allocator, source.frames);
                     defer allocator.destroy(chunk);
                     chunk.slice(frames_done, frames_done + o.replicate.items);
                     std.debug.print("Slicing for replicate: from {d} to {d} times: {d}\n", .{ frames_done, frames_done + o.replicate.items, o.replicate.times });
@@ -476,7 +449,7 @@ fn outputFrames(
                     cursor += o.replicate.items * o.replicate.times;
                 },
                 .copy => {
-                    var chunk = try as_chunk(allocator, frames);
+                    var chunk = try as_chunk(allocator, source.frames);
                     defer allocator.destroy(chunk);
                     chunk.slice(frames_done, frames_done + o.copy.items);
                     std.debug.print("Slicing for copy: from {d} to {d}\n", .{ frames_done, frames_done + o.copy.items });
@@ -484,6 +457,10 @@ fn outputFrames(
                     result_rows += ((frames_done + o.copy.items) / output_cols) - (frames_done / output_cols);
                     frames_done += o.copy.items;
                     cursor += o.copy.items;
+                },
+                .skip => {
+                    frames_done += o.skip.items;
+                    std.debug.print("skip frames: {d}, new cursor: {d}\n", .{ o.skip.items, cursor });
                 },
             }
         }
@@ -493,7 +470,7 @@ fn outputFrames(
     }
     std.debug.print("Output image frames: {d}, rows: {d}", .{ out_frames, result_rows });
 
-    //remap
+    //remap colors
     for (0..(out_frames * max_width * max_height)) |i| {
         var target_color = combined_image_storage[i];
         if (target_color >= remap_colors.from and target_color < remap_colors.from + remap_colors.n) {
@@ -507,7 +484,7 @@ fn outputFrames(
     return SpriteSheet{ .width = max_width * output_cols, .height = max_height * result_rows, .pixels = combined_image_storage };
 }
 
-fn writeImage(allocator: std.mem.Allocator, name: []const u8, width: usize, height: usize, palette: []zigimg.color.Rgba32, pixels: []u8) !void {
+fn writeImage(allocator: std.mem.Allocator, name: []const u8, width: usize, height: usize, palette: []color.Rgba32, pixels: []u8) !void {
     var combined_image = try zigimg.Image.create(allocator, width, height, .indexed8);
     defer combined_image.deinit();
     @memcpy(combined_image.pixels.indexed8.palette, palette);
@@ -518,7 +495,7 @@ fn writeImage(allocator: std.mem.Allocator, name: []const u8, width: usize, heig
     try combined_image.writeToFilePath(outfile, .{ .png = .{} });
 }
 
-fn as_chunk(allocator: std.mem.Allocator, frames: []Frame) !*FrameChunk {
+fn as_chunk(allocator: std.mem.Allocator, frames: []const Frame) !*FrameChunk {
     var max_width: usize = 0;
     var max_height: usize = 0;
     for (frames) |f| {
@@ -597,11 +574,7 @@ test "traspose_test" {
     try std.testing.expect(std.mem.eql(usize, t2, &t1));
 }
 
-fn readFrames(frames_allocator: std.mem.Allocator, file: std.fs.File, offset: u32) ![]Frame {
-    try file.seekTo(offset);
-    const data = file.reader();
-    std.debug.print("Reading sprite sheet at position {X}\n", .{offset});
-
+fn readD3GR(frames_allocator: std.mem.Allocator, data: std.fs.File.Reader) ![]Frame {
     const header: [4]u8 = try data.readBytesNoEof(4);
     try std.testing.expect(std.mem.eql(u8, &header, "D3GR"));
     _ = try data.readInt(u32, .little); //?
@@ -612,7 +585,6 @@ fn readFrames(frames_allocator: std.mem.Allocator, file: std.fs.File, offset: u3
     const frames_num: u16 = try data.readInt(u16, .little);
 
     try data.skipBytes(frames_start - 26, .{});
-    // std.debug.print("Frames start: {X}, frames num: {d}, jump: {x}\n", .{ frames_start, frames_num, frames_start - 26 });
 
     var frames: []Frame = try frames_allocator.alloc(Frame, frames_num);
 
@@ -641,17 +613,16 @@ fn readFrames(frames_allocator: std.mem.Allocator, file: std.fs.File, offset: u3
     return frames;
 }
 
-const std = @import("std");
-const zigimg = @import("zigimg");
-const zlua = @import("zlua");
-
-const Lua = zlua.Lua;
-
-fn outputPalette(allocator: std.mem.Allocator, palette: []zigimg.color.Rgba32) void {
-    // *   Output palette *//
+fn outputPalette(allocator: std.mem.Allocator, palette: []color.Rgba32) void {
     {
         var image = try zigimg.Image.fromRawPixels(allocator, 16, 16, @ptrCast(&palette), .rgba32);
         defer image.deinit();
         try image.writeToFilePath("C:/Projects/p1.png", .{ .png = .{} });
     }
 }
+
+const std = @import("std");
+const zigimg = @import("zigimg");
+const color = zigimg.color;
+const zlua = @import("zlua");
+const Lua = zlua.Lua;
