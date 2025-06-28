@@ -48,8 +48,6 @@ pub fn spriteSheet(lua: *Lua) !i32 {
 //     return 0;
 // }
 
-const OpsOnIndex = struct { index: u32, ops: []const FrameBlockOp };
-
 pub fn main() !void {
     // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
     std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
@@ -135,35 +133,30 @@ pub fn main() !void {
     // sprite_sheet(name, w, h).from[frames(at_index)(+w,+h).chunks[], frames[at_index](+w, +h).chunks[]]
     //(read frames(+fsize), apply ops(+image_len) => chunk), write_chunk at offset(+image_size), write_pixels, write image
 
+    var frames_arena_allocator = std.heap.ArenaAllocator.init(allocator);
+    defer frames_arena_allocator.deinit();
+    const fa = frames_arena_allocator.allocator();
+
     //indices point to images packed in a .RES file
-    const sources = [_]OpsOnIndex{
-        .{ .index = index[3], .ops = &ops },
-        .{ .index = index[7], .ops = &ops },
-        .{ .index = index[8], .ops = &ops },
-        .{ .index = index[9], .ops = &ops },
-        .{ .index = index[10], .ops = &ops },
-        .{ .index = index[11], .ops = &ops },
-        .{ .index = index[12], .ops = &ops },
-        .{ .index = index[13], .ops = &[_]FrameBlockOp{
+    const sources = [_]Output{
+        .{ .transform = .{ .frames = try from(fa, file, index[3]), .ops = &ops } }, .{ .transform = .{ .frames = try from(fa, file, index[7]), .ops = &ops } }, .{ .transform = .{ .frames = try from(fa, file, index[8]), .ops = &ops } }, .{ .transform = .{ .frames = try from(fa, file, index[9]), .ops = &ops } }, .{ .transform = .{ .frames = try from(fa, file, index[10]), .ops = &ops } }, .{ .transform = .{ .frames = try from(fa, file, index[11]), .ops = &ops } }, .{ .transform = .{ .frames = try from(fa, file, index[12]), .ops = &ops } },
+        .{ .transform = .{ .frames = try from(fa, file, index[13]), .ops = &[_]FrameBlockOp{
             .{ .copy = .{ .items = 34 } },
             .{ .skip = .{ .items = 4 } },
             .{ .copy = .{ .items = 17 } },
-        } },
+        } } },
+        .{ .transform = .{ .frames = try from(fa, file, index[3]), .ops = &[_]FrameBlockOp{
+            .{ .replicate = .{ .items = 1, .times = 51 } },
+        } } },
+        .{ .offset = .{ .frames = -51 } },
+        .{ .transform = .{ .frames = try from(fa, file, index[14]), .ops = &[_]FrameBlockOp{
+            .{ .copy = .{ .items = 34 } },
+            .{ .skip = .{ .items = 4 } },
+            .{ .copy = .{ .items = 17 } },
+        } } },
     };
 
-    var frames_arena_allocator = std.heap.ArenaAllocator.init(allocator);
-    defer frames_arena_allocator.deinit();
-    const frames_allocator = frames_arena_allocator.allocator();
-
-    //read frames
-    var transforms: []Transform = try frames_allocator.alloc(Transform, sources.len);
-    for (sources, 0..sources.len) |s, i| {
-        try file.seekTo(s.index);
-        transforms[i].frames = try readD3GR(frames_allocator, file.reader());
-        transforms[i].ops = s.ops;
-    }
-
-    const sprite_sheet = try outputFrames(allocator, transforms, .{ .from = 88, .to = 88, .n = 8 }, 16, 128);
+    const sprite_sheet = try outputFrames(allocator, &sources, .{ .from = 88, .to = 88, .n = 8 }, 16, 256);
     defer allocator.free(sprite_sheet.pixels);
 
     try writeImage(allocator, "coast", sprite_sheet.width, sprite_sheet.height, palette[0..256], sprite_sheet.pixels);
@@ -172,10 +165,24 @@ pub fn main() !void {
     // ops.
 }
 
+pub fn from(a: std.mem.Allocator, file: std.fs.File, offset: u32) ![]const Frame {
+    try file.seekTo(offset);
+    return readD3GR(a, file.reader());
+}
+
+const Output = union(enum) {
+    transform: Transform,
+    seek: Seek,
+    offset: Offset,
+};
+
 const Transform = struct {
     frames: []const Frame,
     ops: []const FrameBlockOp,
 };
+
+const Seek = struct { to_frame: usize };
+const Offset = struct { frames: isize };
 
 pub fn readIndex(a: std.mem.Allocator, data: std.fs.File.Reader) ![]u32 {
     const num_nodes = try data.readInt(u32, .little);
@@ -275,9 +282,9 @@ const FrameChunk = struct {
         return FrameIterator{ .i = 0, .frames = self.frames, .perm = self.perm, .j = 0, .replicate = self.repl_n };
     }
 
-    pub fn slice(self: *FrameChunk, from: usize, to: usize) void {
-        self.frames = self.frames[from..to];
-        self.len = to - from;
+    pub fn slice(self: *FrameChunk, from_frame: usize, to: usize) void {
+        self.frames = self.frames[from_frame..to];
+        self.len = to - from_frame;
     }
 
     fn transpose(self: *FrameChunk, allocator: std.mem.Allocator, rows: usize, cols: usize) ![]usize {
@@ -298,7 +305,7 @@ const FrameChunk = struct {
         self.len = self.len * times;
     }
 };
-const Frame = struct { width: u16, height: u16, pixels: []u8 };
+const Frame = struct { width: u16, height: u16, offset_w: u16, offset_h: u16, pixels: []u8 };
 
 fn doUnits(allocator: std.mem.Allocator, file: std.fs.File, index: []u32, palette: [256]color.Rgba32) !void {
     const ops = [_]FrameBlockOp{ FrameBlockOp{ .transpose = Transpose{ .rows = 5, .cols = 4 } }, FrameBlockOp{ .transpose = Transpose{ .rows = 5, .cols = 4 } }, FrameBlockOp{ .replicate = Replicate{ .items = 4, .times = 5 } } };
@@ -365,7 +372,7 @@ const ReadFrames = struct { from: u32, ops: []FrameBlockOp };
 
 fn outputFrames(
     allocator: std.mem.Allocator,
-    sources: []const Transform,
+    sources: []const Output,
     remap_colors: RemapColors,
     output_cols: usize,
     out_image_frames: usize,
@@ -373,9 +380,12 @@ fn outputFrames(
     var max_width: usize = 0;
     var max_height: usize = 0;
     for (sources) |source| {
-        for (source.frames) |f| {
-            if (f.height > max_height) max_height = f.height;
-            if (f.width > max_width) max_width = f.width;
+        switch (source) {
+            .transform => for (source.transform.frames) |f| {
+                if (f.height > max_height) max_height = f.height;
+                if (f.width > max_width) max_width = f.width;
+            },
+            else => {},
         }
     }
     std.debug.print("frameSets: {d}, frame size: {d}x{d}\n", .{ sources.len, max_width, max_height });
@@ -384,27 +394,33 @@ fn outputFrames(
     var out_frames: usize = 0;
     {
         for (sources) |source| {
-            var read_frames: usize = 0;
-            for (source.ops) |o| {
-                switch (o) {
-                    .transpose => {
-                        out_frames += o.transpose.cols * o.transpose.rows;
-                        read_frames += o.transpose.cols * o.transpose.rows;
-                    },
-                    .replicate => {
-                        out_frames += o.replicate.items * o.replicate.times;
-                        read_frames += o.replicate.items;
-                    },
-                    .copy => {
-                        out_frames += o.copy.items;
-                        read_frames += o.copy.items;
-                    },
-                    .skip => {
-                        read_frames += o.skip.items;
-                    },
-                }
+            switch (source) {
+                .transform => {
+                    var read_frames: usize = 0;
+                    for (source.transform.ops) |o| {
+                        switch (o) {
+                            .transpose => {
+                                out_frames += o.transpose.cols * o.transpose.rows;
+                                read_frames += o.transpose.cols * o.transpose.rows;
+                            },
+                            .replicate => {
+                                out_frames += o.replicate.items * o.replicate.times;
+                                read_frames += o.replicate.items;
+                            },
+                            .copy => {
+                                out_frames += o.copy.items;
+                                read_frames += o.copy.items;
+                            },
+                            .skip => {
+                                read_frames += o.skip.items;
+                            },
+                        }
+                    }
+                    try std.testing.expect(read_frames <= source.transform.frames.len);
+                },
+                .offset => out_frames = @intCast(@as(isize, @intCast(out_frames)) + source.offset.frames),
+                .seek => out_frames = source.seek.to_frame,
             }
-            try std.testing.expect(read_frames <= source.frames.len);
         }
         if (out_image_frames > out_frames) {
             out_frames = out_image_frames;
@@ -418,51 +434,61 @@ fn outputFrames(
     var cursor: usize = 0;
     var result_rows: usize = 0;
     for (sources) |source| {
-        var frames_done: usize = 0;
-        for (source.ops) |o| {
-            switch (o) {
-                .transpose => {
-                    // const frames_perm = try transpose(allocator, o.transpose.rows, o.transpose.cols, frames_done);
-                    // defer allocator.free(frames_perm);
-                    const frames_to_do: usize = o.transpose.cols * o.transpose.rows;
-                    // write_block(o.transpose.cols, o.transpose.rows, frames, frames_perm, combined_image_storage[frames_done * max_height * max_width .. (frames_done + frames_to_do) * max_height * max_width]);
-                    var chunk = try as_chunk(allocator, source.frames);
-                    defer allocator.destroy(chunk);
-                    chunk.slice(frames_done, frames_done + frames_to_do);
-                    const frames_perm = try chunk.transpose(allocator, o.transpose.rows, o.transpose.cols);
-                    defer allocator.free(frames_perm);
-                    write_chunk(chunk, combined_image_storage, output_cols, cursor);
-                    frames_done += frames_to_do;
-                    result_rows += o.transpose.cols;
-                    cursor += frames_to_do;
-                    std.debug.print("frames done: {d}, frames to do: {d}, rows done: {d}\n", .{ frames_done, frames_to_do, result_rows });
-                },
-                .replicate => {
-                    var chunk = try as_chunk(allocator, source.frames);
-                    defer allocator.destroy(chunk);
-                    chunk.slice(frames_done, frames_done + o.replicate.items);
-                    std.debug.print("Slicing for replicate: from {d} to {d} times: {d}\n", .{ frames_done, frames_done + o.replicate.items, o.replicate.times });
-                    chunk.replicate(o.replicate.times);
-                    write_chunk(chunk, combined_image_storage, output_cols, cursor);
-                    result_rows += o.replicate.items;
-                    frames_done += o.replicate.items * o.replicate.times;
-                    cursor += o.replicate.items * o.replicate.times;
-                },
-                .copy => {
-                    var chunk = try as_chunk(allocator, source.frames);
-                    defer allocator.destroy(chunk);
-                    chunk.slice(frames_done, frames_done + o.copy.items);
-                    std.debug.print("Slicing for copy: from {d} to {d}\n", .{ frames_done, frames_done + o.copy.items });
-                    write_chunk(chunk, combined_image_storage, output_cols, cursor);
-                    result_rows += ((frames_done + o.copy.items) / output_cols) - (frames_done / output_cols);
-                    frames_done += o.copy.items;
-                    cursor += o.copy.items;
-                },
-                .skip => {
-                    frames_done += o.skip.items;
-                    std.debug.print("skip frames: {d}, new cursor: {d}\n", .{ o.skip.items, cursor });
-                },
-            }
+        switch (source) {
+            .transform => {
+                var frames_done: usize = 0;
+                for (source.transform.ops) |o| {
+                    switch (o) {
+                        .transpose => {
+                            // const frames_perm = try transpose(allocator, o.transpose.rows, o.transpose.cols, frames_done);
+                            // defer allocator.free(frames_perm);
+                            const frames_to_do: usize = o.transpose.cols * o.transpose.rows;
+                            // write_block(o.transpose.cols, o.transpose.rows, frames, frames_perm, combined_image_storage[frames_done * max_height * max_width .. (frames_done + frames_to_do) * max_height * max_width]);
+                            var chunk = try as_chunk(allocator, source.transform.frames);
+                            defer allocator.destroy(chunk);
+                            chunk.slice(frames_done, frames_done + frames_to_do);
+                            const frames_perm = try chunk.transpose(allocator, o.transpose.rows, o.transpose.cols);
+                            defer allocator.free(frames_perm);
+                            write_chunk(chunk, combined_image_storage, output_cols, cursor);
+                            result_rows += ((frames_done + frames_to_do) / output_cols) - (frames_done / output_cols);
+                            frames_done += frames_to_do;
+                            cursor += frames_to_do;
+                            std.debug.print("frames done: {d}, frames to do: {d}, rows done: {d}\n", .{ frames_done, frames_to_do, result_rows });
+                        },
+                        .replicate => {
+                            var chunk = try as_chunk(allocator, source.transform.frames);
+                            defer allocator.destroy(chunk);
+                            chunk.slice(frames_done, frames_done + o.replicate.items);
+                            std.debug.print("Slicing for replicate: from {d} to {d} times: {d}\n", .{ frames_done, frames_done + o.replicate.items, o.replicate.times });
+                            chunk.replicate(o.replicate.times);
+                            write_chunk(chunk, combined_image_storage, output_cols, cursor);
+                            result_rows += ((frames_done + o.replicate.items) / output_cols) - (frames_done / output_cols);
+                            frames_done += o.replicate.items * o.replicate.times;
+                            cursor += o.replicate.items * o.replicate.times;
+                        },
+                        .copy => {
+                            var chunk = try as_chunk(allocator, source.transform.frames);
+                            defer allocator.destroy(chunk);
+                            chunk.slice(frames_done, frames_done + o.copy.items);
+                            std.debug.print("Slicing for copy: from {d} to {d}\n", .{ frames_done, frames_done + o.copy.items });
+                            write_chunk(chunk, combined_image_storage, output_cols, cursor);
+                            result_rows += ((frames_done + o.copy.items) / output_cols) - (frames_done / output_cols);
+                            frames_done += o.copy.items;
+                            cursor += o.copy.items;
+                        },
+                        .skip => {
+                            frames_done += o.skip.items;
+                            result_rows += ((frames_done + o.skip.items) / output_cols) - (frames_done / output_cols);
+                            std.debug.print("skip frames: {d}, new cursor: {d}\n", .{ o.skip.items, cursor });
+                        },
+                    }
+                }
+            },
+            .offset => {
+                cursor = @intCast(@as(isize, @intCast(cursor)) + source.offset.frames);
+                std.debug.print("Cursor offset of: {d}, new cursor: {d}\n", .{ source.offset.frames, cursor });
+            },
+            .seek => cursor = source.seek.to_frame,
         }
     }
     if ((out_image_frames / output_cols) > result_rows) {
@@ -533,8 +559,10 @@ fn write_chunk(chunk: *FrameChunk, storage: []u8, cols: usize, offset_frames: us
         for (start_col..end_col) |j| {
             std.debug.print("Put frame {d}:{d}, frame size: {d}x{d}\n", .{ i, j, chunk.frame_w, chunk.frame_h });
             const source_frame = frame_iterator.next().?;
-            const frame_offset_w: usize = (chunk.frame_w - source_frame.width) / 2;
-            const frame_offset_h: usize = (chunk.frame_h - source_frame.height) / 2;
+            // const frame_offset_w: usize = (chunk.frame_w - source_frame.width) / 2;
+            // const frame_offset_h: usize = (chunk.frame_h - source_frame.height) / 2;
+            const frame_offset_w: usize = source_frame.offset_w;
+            const frame_offset_h: usize = source_frame.offset_h;
             for (0..source_frame.height) |h| {
                 for (0..source_frame.width) |w| {
                     const combined_image_storage_offset_h: usize = chunk.frame_w * cols * (i * chunk.frame_h + h + frame_offset_h);
@@ -545,7 +573,9 @@ fn write_chunk(chunk: *FrameChunk, storage: []u8, cols: usize, offset_frames: us
                     // if (i == 4 and j == 0 and h < 10) {
                     // std.debug.print("frame {d}:{d}, size: {d}x{d}, offsets: {d}:{d}, put: {d}:{d} => {d}:{d}, total offset: {d} \n", .{ i, j, source_frame.height, source_frame.width, frame_offset_h, frame_offset_w, h, w, combined_image_storage_offset_h, combined_image_storage_offset_w, combined_image_storage_offset });
                     // }
-                    storage[combined_image_storage_offset] = source_frame.pixels[target_frame_offset];
+                    if (source_frame.pixels[target_frame_offset] != 0) {
+                        storage[combined_image_storage_offset] = source_frame.pixels[target_frame_offset];
+                    }
                 }
             }
         }
@@ -594,12 +624,12 @@ fn readD3GR(frames_allocator: std.mem.Allocator, data: std.fs.File.Reader) ![]Fr
             _ = try data.readInt(u32, .little); //frame_size
 
             _ = try data.readInt(u32, .little); //?
-            _ = try data.readInt(u16, .little); //?
-            _ = try data.readInt(u16, .little); //?
+            const offset_w = try data.readInt(u16, .little); //?
+            const offset_h = try data.readInt(u16, .little); //?
 
             const height: u16 = try data.readInt(u16, .little);
             const width: u16 = try data.readInt(u16, .little);
-            // std.debug.print("Frame {d}: width: {d}, height: {d}\n", .{ i, width, height });
+            // std.debug.print("Frame {d}: {} {} o_w: {} o_h: {} width: {d}, height: {d}\n", .{ i, x1, x2, offset_w, offset_h, width, height });
             var pixels: []u8 = try frames_allocator.alloc(u8, width * height);
             {
                 var j: usize = 0;
@@ -607,7 +637,7 @@ fn readD3GR(frames_allocator: std.mem.Allocator, data: std.fs.File.Reader) ![]Fr
                     pixels[j] = try data.readByte();
                 }
             }
-            frames[i] = Frame{ .width = width, .height = height, .pixels = pixels };
+            frames[i] = Frame{ .width = width, .height = height, .offset_w = offset_w, .offset_h = offset_h, .pixels = pixels };
         }
     }
     return frames;
