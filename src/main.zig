@@ -105,6 +105,7 @@ pub fn main() !void {
     // lua.rawGetIndex();
 
     const data_file_name = "C:/Program Files/GOG Galaxy/Games/War Wind/Data/RES.001";
+    // const data_file_name = "C:/Program Files/GOG Galaxy/Games/War Wind/Editor/Data/RES.005";
 
     const file = try std.fs.cwd().openFile(data_file_name, .{ .mode = .read_only });
     defer file.close();
@@ -139,27 +140,47 @@ pub fn main() !void {
 
     //indices point to images packed in a .RES file
     const sources = [_]Output{
-        .{ .transform = .{ .frames = try from(fa, file, index[3]), .ops = &ops } }, .{ .transform = .{ .frames = try from(fa, file, index[7]), .ops = &ops } }, .{ .transform = .{ .frames = try from(fa, file, index[8]), .ops = &ops } }, .{ .transform = .{ .frames = try from(fa, file, index[9]), .ops = &ops } }, .{ .transform = .{ .frames = try from(fa, file, index[10]), .ops = &ops } }, .{ .transform = .{ .frames = try from(fa, file, index[11]), .ops = &ops } }, .{ .transform = .{ .frames = try from(fa, file, index[12]), .ops = &ops } },
+        .{ .transform = .{ .frames = try from(fa, file, index[3]), .ops = &ops } },                                             .{ .transform = .{ .frames = try from(fa, file, index[7]), .ops = &ops } }, .{ .transform = .{ .frames = try from(fa, file, index[8]), .ops = &ops } }, .{ .transform = .{ .frames = try from(fa, file, index[9]), .ops = &ops } }, .{ .transform = .{ .frames = try from(fa, file, index[10]), .ops = &ops } }, .{ .transform = .{ .frames = try from(fa, file, index[11]), .ops = &ops } }, .{ .transform = .{ .frames = try from(fa, file, index[12]), .ops = &ops } },
         .{ .transform = .{ .frames = try from(fa, file, index[13]), .ops = &[_]FrameBlockOp{
             .{ .copy = .{ .items = 34 } },
             .{ .skip = .{ .items = 4 } },
-            .{ .copy = .{ .items = 17 } },
+            .{ .copy = .{ .items = 18 } },
         } } },
         .{ .transform = .{ .frames = try from(fa, file, index[3]), .ops = &[_]FrameBlockOp{
-            .{ .replicate = .{ .items = 1, .times = 51 } },
+            .{ .replicate = .{ .items = 1, .times = 52 } },
         } } },
-        .{ .offset = .{ .frames = -51 } },
+        .{ .offset = .{ .frames = -52 } },
         .{ .transform = .{ .frames = try from(fa, file, index[14]), .ops = &[_]FrameBlockOp{
             .{ .copy = .{ .items = 34 } },
             .{ .skip = .{ .items = 4 } },
-            .{ .copy = .{ .items = 17 } },
+            .{ .copy = .{ .items = 18 } },
         } } },
+        .{ .transform = .{ .frames = try from(fa, file, index[7]), .ops = &[_]FrameBlockOp{
+            .{ .replicate = .{ .items = 1, .times = 52 } },
+        } } },
+        .{ .offset = .{ .frames = -52 } },
+        .{ .transform = .{ .frames = try from(fa, file, index[14]), .ops = &[_]FrameBlockOp{
+            .{ .copy = .{ .items = 34 } },
+            .{ .skip = .{ .items = 4 } },
+            .{ .copy = .{ .items = 18 } },
+        } } },
+        .{ .transform = .{ .frames = try from(fa, file, index[8]), .ops = &[_]FrameBlockOp{
+            .{ .replicate = .{ .items = 1, .times = 52 } },
+        } } },
+        .{ .offset = .{ .frames = -52 } },
+        .{ .transform = .{ .frames = try from(fa, file, index[15]), .ops = &[_]FrameBlockOp{
+            .{ .copy = .{ .items = 34 } },
+            .{ .skip = .{ .items = 4 } },
+            .{ .copy = .{ .items = 18 } },
+        } } },
+        .{ .transform = .{ .frames = try from(fa, file, index[17]), .ops = &[_]FrameBlockOp{.{ .copy = .{ .items = 56 } }} } },
+        .{ .transform = .{ .frames = try from(fa, file, index[23]), .ops = &[_]FrameBlockOp{.{ .copy = .{ .items = 36 } }} } },
     };
 
-    const sprite_sheet = try outputFrames(allocator, &sources, .{ .from = 88, .to = 88, .n = 8 }, 16, 256);
+    const sprite_sheet = try outputFrames(allocator, &sources, .{ .from = 88, .to = 88, .n = 8 }, 16, 512);
     defer allocator.free(sprite_sheet.pixels);
 
-    try writeImage(allocator, "coast", sprite_sheet.width, sprite_sheet.height, palette[0..256], sprite_sheet.pixels);
+    try writeImage(allocator, "swamp", sprite_sheet.width, sprite_sheet.height, palette[0..256], sprite_sheet.pixels);
 
     // var chunk: FrameChunk = read_frames();
     // ops.
@@ -192,7 +213,7 @@ pub fn readIndex(a: std.mem.Allocator, data: std.fs.File.Reader) ![]u32 {
     for (0..num_nodes) |i| {
         const next_node_position: u32 = try data.readInt(u32, .little);
         index[i] = next_node_position;
-        // try stdout.print("Node {d}: next node position: {X}\n", .{ i, next_node_position });
+        std.debug.print("Node {d}: offset: {X}\n", .{ i, next_node_position });
         // try bw.flush(); // Don't forget to flush!
         // try data.skipBytes(next_node_position - current_position, .{});
     }
