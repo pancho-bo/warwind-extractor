@@ -129,7 +129,8 @@ pub fn main() !void {
 
     // try doUnits(allocator, file, index, palette);
 
-    const ops = [_]FrameBlockOp{.{ .copy = .{ .items = 4 } }};
+    // const ops = [_]FrameBlockOp{.{ .copy = .{ .items = 4 } }};
+    const ops = copy(4);
     const copy56 = [_]FrameBlockOp{.{ .copy = .{ .items = 56 } }};
     const replicate56 = [_]FrameBlockOp{.{ .replicate = .{ .items = 1, .times = 56 } }};
     const ops3 = &[_]FrameBlockOp{
@@ -137,6 +138,7 @@ pub fn main() !void {
         .{ .skip = .{ .items = 4 } },
         .{ .copy = .{ .items = 18 } },
     };
+    const noremap: RemapColors = .{ .from = 88, .to = 88, .n = 8 };
     _ = ops3;
     // allocate pixels, how to get size???
     // sprite_sheet(name, w, h).from[frames(at_index)(+w,+h).chunks[], frames[at_index](+w, +h).chunks[]]
@@ -201,7 +203,7 @@ pub fn main() !void {
     };
 
     // _ = sources;
-    const sprite_sheet = try outputFrames(allocator, &sources, .{ .from = 88, .to = 88, .n = 8 }, 16, 512);
+    const sprite_sheet = try outputFrames(allocator, &sources, noremap, 16, 512);
     defer allocator.free(sprite_sheet.pixels);
 
     try writeImage(allocator, "tundra", sprite_sheet.width, sprite_sheet.height, palette[0..256], sprite_sheet.pixels);
@@ -228,6 +230,18 @@ pub fn main() !void {
     defer file1.close();
 
     try getTerrain(allocator, file1, tilesIndex);
+
+    const cross_source = [_]Output{
+        .{ .transform = .{ .frames = try from(fa, file, index[192]), .ops = &copy(8) } },
+    };
+    const cross_image = try outputFrames(allocator, &cross_source, noremap, 1, 8);
+    defer allocator.free(cross_image.pixels);
+
+    try writeImage(allocator, "cross", cross_image.width, cross_image.height, palette[0..256], cross_image.pixels);
+}
+
+fn copy(items: comptime_int) [1]FrameBlockOp {
+    return [_]FrameBlockOp{.{ .copy = .{ .items = items } }};
 }
 
 const TilesIndex = std.AutoHashMap(u8, usize);
@@ -465,6 +479,8 @@ const FrameChunk = struct {
     rows: usize,
     frame_w: usize,
     frame_h: usize,
+    offset_h_min: usize,
+    offset_w_min: usize,
     frames: []const Frame,
     perm: ?[]usize = null,
     repl_n: ?usize = null,
@@ -569,13 +585,25 @@ fn outputFrames(
     output_cols: usize,
     out_image_frames: usize,
 ) !SpriteSheet {
+    //why there is a need to calculate these twice?
     var max_width: usize = 0;
     var max_height: usize = 0;
+    var offset_h_min: usize = 0xFFFF_FFFF;
+    var offset_w_min: usize = 0xFFFF_FFFF;
     for (sources) |source| {
         switch (source) {
             .transform => for (source.transform.frames) |f| {
-                if (f.height > max_height) max_height = f.height;
-                if (f.width > max_width) max_width = f.width;
+                if (f.offset_h < offset_h_min) offset_h_min = f.offset_h;
+                if (f.offset_w < offset_w_min) offset_w_min = f.offset_w;
+            },
+            else => {},
+        }
+    }
+    for (sources) |source| {
+        switch (source) {
+            .transform => for (source.transform.frames) |f| {
+                if (f.height + f.offset_h - offset_h_min > max_height) max_height = f.height + f.offset_h - offset_h_min;
+                if (f.width + f.offset_w - offset_h_min > max_width) max_width = f.width + f.offset_w - offset_w_min;
             },
             else => {},
         }
@@ -716,9 +744,15 @@ fn writeImage(allocator: std.mem.Allocator, name: []const u8, width: usize, heig
 fn as_chunk(allocator: std.mem.Allocator, frames: []const Frame) !*FrameChunk {
     var max_width: usize = 0;
     var max_height: usize = 0;
+    var offset_h_min: usize = 0xFFFF_FFFF;
+    var offset_w_min: usize = 0xFFFF_FFFF;
     for (frames) |f| {
-        if (f.height > max_height) max_height = f.height;
-        if (f.width > max_width) max_width = f.width;
+        if (f.offset_h < offset_h_min) offset_h_min = f.offset_h;
+        if (f.offset_w < offset_w_min) offset_w_min = f.offset_w;
+    }
+    for (frames) |f| {
+        if (f.height + f.offset_h - offset_h_min > max_height) max_height = f.height + f.offset_h - offset_h_min;
+        if (f.width + f.offset_w - offset_w_min > max_width) max_width = f.width + f.offset_w - offset_w_min;
     }
     const chunk = try allocator.create(FrameChunk);
     chunk.* = FrameChunk{
@@ -726,6 +760,8 @@ fn as_chunk(allocator: std.mem.Allocator, frames: []const Frame) !*FrameChunk {
         .cols = 1,
         .frame_h = max_height,
         .frame_w = max_width,
+        .offset_h_min = offset_h_min,
+        .offset_w_min = offset_w_min,
         .frames = frames,
         .len = frames.len,
     };
@@ -753,8 +789,8 @@ fn write_chunk(chunk: *FrameChunk, storage: []u8, cols: usize, offset_frames: us
             const source_frame = frame_iterator.next().?;
             // const frame_offset_w: usize = (chunk.frame_w - source_frame.width) / 2;
             // const frame_offset_h: usize = (chunk.frame_h - source_frame.height) / 2;
-            const frame_offset_w: usize = source_frame.offset_w;
-            const frame_offset_h: usize = source_frame.offset_h;
+            const frame_offset_w: usize = source_frame.offset_w - chunk.offset_w_min;
+            const frame_offset_h: usize = source_frame.offset_h - chunk.offset_h_min;
             for (0..source_frame.height) |h| {
                 for (0..source_frame.width) |w| {
                     const combined_image_storage_offset_h: usize = chunk.frame_w * cols * (i * chunk.frame_h + h + frame_offset_h);
@@ -762,9 +798,9 @@ fn write_chunk(chunk: *FrameChunk, storage: []u8, cols: usize, offset_frames: us
                     // const combined_image_storage_offset: usize = i * 5 * max_height * max_width + j * max_width + (h + frame_offset_h) * max_width + w + frame_offset_w;
                     const combined_image_storage_offset: usize = combined_image_storage_offset_h + combined_image_storage_offset_w;
                     const target_frame_offset = h * source_frame.width + w;
-                    // if (i == 4 and j == 0 and h < 10) {
-                    // std.debug.print("frame {d}:{d}, size: {d}x{d}, offsets: {d}:{d}, put: {d}:{d} => {d}:{d}, total offset: {d} \n", .{ i, j, source_frame.height, source_frame.width, frame_offset_h, frame_offset_w, h, w, combined_image_storage_offset_h, combined_image_storage_offset_w, combined_image_storage_offset });
-                    // }
+                    if (j == 0 and h < 1) {
+                        std.debug.print("frame {d}:{d}, size: {d}x{d}, offsets: {d}:{d}, put: {d}:{d} => {d}:{d}, total offset: {d} \n", .{ i, j, source_frame.height, source_frame.width, frame_offset_h, frame_offset_w, h, w, combined_image_storage_offset_h, combined_image_storage_offset_w, combined_image_storage_offset });
+                    }
                     if (source_frame.pixels[target_frame_offset] != 0) {
                         storage[combined_image_storage_offset] = source_frame.pixels[target_frame_offset];
                     }
