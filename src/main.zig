@@ -1,3 +1,58 @@
+const LuaSourceFile = struct { file: usize, offset: usize };
+const LuaChunk = struct { write_offset: usize, source: LuaSourceFile, transform: []FrameBlockOp };
+
+const Palette = []color.Rgba32;
+
+const ResFile = struct {
+    file: std.fs.File,
+    index: []const u32,
+
+    pub fn deinit(self: ResFile, a: std.mem.Allocator) void {
+        self.file.close();
+        a.free(self.index);
+    }
+};
+
+var files: std.BoundedArrayAligned(ResFile, 8, 8) = undefined;
+var palettes: std.BoundedArrayAligned(Palette, 8, 8) = undefined;
+
+pub fn openFile(lua: *Lua) !i32 {
+    errdefer {
+        const message = lua.toString(-1) catch "Can't get error from lua";
+        std.debug.print("{s}", .{message});
+    }
+    const data_file_name = try lua.toString(-1);
+    _ = lua.pop(1);
+
+    const file = try std.fs.cwd().openFile(data_file_name, .{ .mode = .read_only });
+    const index: []u32 = try readIndex(lua.allocator(), file.reader());
+
+    try files.append(ResFile{ .file = file, .index = index });
+
+    _ = try lua.pushAny(files.len - 1);
+    return 1;
+}
+
+pub fn addPalette(lua: *Lua) !i32 {
+    errdefer {
+        const message = lua.toString(-1) catch "Can't get error from lua";
+        std.debug.print("{s}", .{message});
+    }
+    const file_handle = try lua.toAny(usize, -1);
+    const palette_index = try lua.toAny(usize, -2);
+    _ = lua.pop(2);
+
+    const resfile = files.get(file_handle);
+
+    try resfile.file.seekTo(resfile.index[palette_index]);
+    const palette: Palette = try readPalette(lua.allocator(), resfile.file.reader());
+
+    try palettes.append(palette);
+
+    _ = try lua.pushAny(palettes.len - 1);
+    return 1;
+}
+
 pub fn spriteSheet(lua: *Lua) !i32 {
     errdefer {
         const message = lua.toString(-1) catch "Can't get error from lua";
@@ -17,7 +72,20 @@ pub fn spriteSheet(lua: *Lua) !i32 {
     const rows: usize = @intCast(try lua.toInteger(-1));
     _ = lua.pop(1);
 
-    std.debug.print("Name is {s}, columns: {d}, rows: {d}", .{ name, columns, rows });
+    _ = lua.getField(-1, "out_dir");
+    const out_dir = try lua.toString(-1);
+    _ = lua.pop(1);
+
+    _ = lua.getField(-1, "frames");
+    var chunks = try lua.toAnyAlloc([]LuaChunk, -1);
+    defer chunks.deinit();
+    _ = lua.pop(1);
+
+    _ = lua.getField(-1, "palette");
+    const palette_index = try lua.toAny(usize, -1);
+    _ = lua.pop(1);
+
+    std.debug.print("Name is {s}, columns: {d}, rows: {d}, out_dir: {s}, frames: {d}\n", .{ name, columns, rows, out_dir, chunks.value.len });
 
     // const ops = [_]FramesBlockOperation{ FramesBlockOperation{ .transpose = Transpose{ .rows = 5, .cols = 4 } }, FramesBlockOperation{ .transpose = Transpose{ .rows = 5, .cols = 4 } }, FramesBlockOperation{ .replicate = Replicate{ .items = 4, .times = 5 } } };
     // try outputFrames(lua.allocator(), file, index[40], palette, &ops, "minister", .{ .from = 88, .to = 88, .n = 8 }, 5, 0);
@@ -27,6 +95,10 @@ pub fn spriteSheet(lua: *Lua) !i32 {
     // const size: usize = @intCast(try lua.toInteger(-1));
     // std.debug.print("Size is {d}\n", .{size});
 
+    const resfile = files.get(chunks.value[0].source.file);
+    const palette = palettes.get(palette_index);
+
+    try doUI(lua.allocator(), lua.allocator(), out_dir, resfile.file, resfile.index, palette);
     return 0;
 }
 
@@ -59,6 +131,9 @@ pub fn main() !void {
     var bw = std.io.bufferedWriter(stdout_file);
     const stdout = bw.writer();
 
+    files = try std.BoundedArray(ResFile, 8).init(0);
+    palettes = try std.BoundedArray(Palette, 8).init(0);
+
     try stdout.print("Run `zig build test` to run the tests.\n", .{});
 
     try bw.flush(); // Don't forget to flush!
@@ -74,6 +149,10 @@ pub fn main() !void {
     lua.openTable();
     lua.pushFunction(zlua.wrap(spriteSheet));
     lua.setGlobal("SpriteSheet");
+    lua.pushFunction(zlua.wrap(openFile));
+    lua.setGlobal("ResFile");
+    lua.pushFunction(zlua.wrap(addPalette));
+    lua.setGlobal("Palette");
 
     {
         errdefer {
@@ -82,7 +161,16 @@ pub fn main() !void {
             std.debug.print("Got error from Lua: {s}\n", .{message});
         }
         try lua.doFile("scripts/conf.lua");
+        try lua.doFile("scripts/sprites.lua");
+        defer for (files.slice()) |f| {
+            f.deinit(lua.allocator());
+        };
+        defer for (palettes.slice()) |p| {
+            lua.allocator().free(p);
+        };
     }
+
+    const dir: []const u8 = "C:/Projects/data.wwgus";
 
     _ = try lua.getGlobal("Infile");
     const image_path_lua = try lua.toString(-1);
@@ -90,9 +178,10 @@ pub fn main() !void {
     defer allocator.free(image_path);
     lua.pop(1);
 
-    _ = try lua.getGlobal("Palette");
-    const palette_index: usize = @intCast(try lua.toInteger(-1));
-    lua.pop(1);
+    // _ = try lua.getGlobal("Palette");
+    // const palette_index: usize = @intCast(try lua.toInteger(-1));
+    // lua.pop(1);
+    const palette_index = 0;
 
     // _ = try lua.getGlobal("Rogue");
     // const rogue_lua: usize = @intCast(try lua.toInteger(-1));
@@ -138,7 +227,6 @@ pub fn main() !void {
         .{ .skip = .{ .items = 4 } },
         .{ .copy = .{ .items = 18 } },
     };
-    const noremap: RemapColors = .{ .from = 88, .to = 88, .n = 8 };
     _ = ops3;
     // allocate pixels, how to get size???
     // sprite_sheet(name, w, h).from[frames(at_index)(+w,+h).chunks[], frames[at_index](+w, +h).chunks[]]
@@ -206,7 +294,7 @@ pub fn main() !void {
     const sprite_sheet = try outputFrames(allocator, &sources, noremap, 16, 512);
     defer allocator.free(sprite_sheet.pixels);
 
-    try writeImage(allocator, "tundra", sprite_sheet.width, sprite_sheet.height, palette[0..256], sprite_sheet.pixels);
+    try writeImage(allocator, "tundra", dir, sprite_sheet.width, sprite_sheet.height, palette[0..256], sprite_sheet.pixels);
 
     // const map_dir_name = "C:/Program Files/GOG Galaxy/Games/War Wind/Data/NETWORK";
     // const map_dir = try std.fs.openDirAbsolute(map_dir_name, .{ .iterate = true });
@@ -231,14 +319,11 @@ pub fn main() !void {
 
     try getTerrain(allocator, file1, tilesIndex);
 
-    const cross_source = [_]Output{
-        .{ .transform = .{ .frames = try from(fa, file, index[192]), .ops = &copy(8) } },
-    };
-    const cross_image = try outputFrames(allocator, &cross_source, noremap, 1, 8);
-    defer allocator.free(cross_image.pixels);
-
-    try writeImage(allocator, "cross", cross_image.width, cross_image.height, palette[0..256], cross_image.pixels);
+    const ui_dir: []const u8 = try std.fmt.allocPrint(allocator, "{s}{s}", .{ dir, "/graphics/ui/ww" });
+    defer allocator.free(ui_dir);
+    try doUI(fa, allocator, ui_dir, file, index, palette);
 }
+const noremap: RemapColors = .{ .from = 88, .to = 88, .n = 8 };
 
 fn copy(items: comptime_int) [1]FrameBlockOp {
     return [_]FrameBlockOp{.{ .copy = .{ .items = items } }};
@@ -513,7 +598,41 @@ const FrameChunk = struct {
         self.len = self.len * times;
     }
 };
-const Frame = struct { width: u16, height: u16, offset_w: u16, offset_h: u16, pixels: []u8 };
+const Frame = struct {
+    width: u16,
+    height: u16,
+    offset_w: u16,
+    offset_h: u16,
+    pixels: []u8,
+    allocator: std.mem.Allocator,
+
+    pub fn init_pixels(self: *Frame, width: u16, height: u16, allocator: std.mem.Allocator) !void {
+        self.width = width;
+        self.height = height;
+        self.pixels = try allocator.alloc(u8, width * height);
+        self.allocator = allocator;
+    }
+
+    pub fn deinit(self: *const Frame) void {
+        self.allocator.free(self.pixels);
+    }
+};
+
+//remove second allocator
+fn doUI(fa: std.mem.Allocator, allocator: std.mem.Allocator, out_dir: []const u8, file: std.fs.File, index: []const u32, palette: []color.Rgba32) !void {
+    const frames = try from(fa, file, index[192]);
+    defer fa.free(frames);
+    defer for (frames) |*f| {
+        f.deinit();
+    };
+    const cross_source = [_]Output{
+        .{ .transform = .{ .frames = frames, .ops = &copy(8) } },
+    };
+    const cross_image = try outputFrames(allocator, &cross_source, noremap, 1, 8);
+    defer allocator.free(cross_image.pixels);
+
+    try writeImage(allocator, "cross", out_dir, cross_image.width, cross_image.height, palette[0..256], cross_image.pixels);
+}
 
 fn doUnits(allocator: std.mem.Allocator, file: std.fs.File, index: []u32, palette: [256]color.Rgba32) !void {
     const ops = [_]FrameBlockOp{ FrameBlockOp{ .transpose = Transpose{ .rows = 5, .cols = 4 } }, FrameBlockOp{ .transpose = Transpose{ .rows = 5, .cols = 4 } }, FrameBlockOp{ .replicate = Replicate{ .items = 4, .times = 5 } } };
@@ -730,12 +849,12 @@ fn outputFrames(
     return SpriteSheet{ .width = max_width * output_cols, .height = max_height * result_rows, .pixels = combined_image_storage };
 }
 
-fn writeImage(allocator: std.mem.Allocator, name: []const u8, width: usize, height: usize, palette: []color.Rgba32, pixels: []u8) !void {
+fn writeImage(allocator: std.mem.Allocator, name: []const u8, dir: []const u8, width: usize, height: usize, palette: []color.Rgba32, pixels: []u8) !void {
     var combined_image = try zigimg.Image.create(allocator, width, height, .indexed8);
     defer combined_image.deinit();
     @memcpy(combined_image.pixels.indexed8.palette, palette);
     @memcpy(combined_image.pixels.indexed8.indices, pixels);
-    const dir = "C:/Projects";
+
     const outfile = try std.fmt.allocPrint(allocator, "{s}/{s}.png", .{ dir, name });
     defer allocator.free(outfile);
     try combined_image.writeToFilePath(outfile, .{ .png = .{} });
@@ -798,9 +917,9 @@ fn write_chunk(chunk: *FrameChunk, storage: []u8, cols: usize, offset_frames: us
                     // const combined_image_storage_offset: usize = i * 5 * max_height * max_width + j * max_width + (h + frame_offset_h) * max_width + w + frame_offset_w;
                     const combined_image_storage_offset: usize = combined_image_storage_offset_h + combined_image_storage_offset_w;
                     const target_frame_offset = h * source_frame.width + w;
-                    if (j == 0 and h < 1) {
-                        std.debug.print("frame {d}:{d}, size: {d}x{d}, offsets: {d}:{d}, put: {d}:{d} => {d}:{d}, total offset: {d} \n", .{ i, j, source_frame.height, source_frame.width, frame_offset_h, frame_offset_w, h, w, combined_image_storage_offset_h, combined_image_storage_offset_w, combined_image_storage_offset });
-                    }
+                    // if (j == 0 and h < 1) {
+                    //     std.debug.print("frame {d}:{d}, size: {d}x{d}, offsets: {d}:{d}, put: {d}:{d} => {d}:{d}, total offset: {d} \n", .{ i, j, source_frame.height, source_frame.width, frame_offset_h, frame_offset_w, h, w, combined_image_storage_offset_h, combined_image_storage_offset_w, combined_image_storage_offset });
+                    // }
                     if (source_frame.pixels[target_frame_offset] != 0) {
                         storage[combined_image_storage_offset] = source_frame.pixels[target_frame_offset];
                     }
@@ -858,14 +977,15 @@ fn readD3GR(frames_allocator: std.mem.Allocator, data: std.fs.File.Reader) ![]Fr
             const height: u16 = try data.readInt(u16, .little);
             const width: u16 = try data.readInt(u16, .little);
             // std.debug.print("Frame {d}: {} {} o_w: {} o_h: {} width: {d}, height: {d}\n", .{ i, x1, x2, offset_w, offset_h, width, height });
-            var pixels: []u8 = try frames_allocator.alloc(u8, width * height);
+            try frames[i].init_pixels(width, height, frames_allocator);
+            frames[i].offset_w = offset_w;
+            frames[i].offset_h = offset_h;
             {
                 var j: usize = 0;
                 while (j < width * height) : (j += 1) {
-                    pixels[j] = try data.readByte();
+                    frames[i].pixels[j] = try data.readByte();
                 }
             }
-            frames[i] = Frame{ .width = width, .height = height, .offset_w = offset_w, .offset_h = offset_h, .pixels = pixels };
         }
     }
     return frames;
