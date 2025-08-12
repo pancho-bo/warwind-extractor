@@ -1,9 +1,6 @@
 const LuaSourceFile = struct { file: usize, offset: u32 };
-const LuaChunk = struct {
-    write_offset: usize,
-    source: LuaSourceFile,
-    transform: []FrameBlockOp,
-};
+
+const LuaFrames = struct { source: LuaSourceFile, transform: []FrameBlockOp, write_offset: isize = 0 };
 
 const Palette = []color.Rgba32;
 
@@ -81,7 +78,7 @@ pub fn spriteSheet(lua: *Lua) !i32 {
     _ = lua.pop(1);
 
     _ = lua.getField(-1, "frames");
-    var chunks = try lua.toAnyAlloc([]LuaChunk, -1);
+    var chunks = try lua.toAnyAlloc([]LuaFrames, -1);
     defer chunks.deinit();
     _ = lua.pop(1);
 
@@ -93,21 +90,46 @@ pub fn spriteSheet(lua: *Lua) !i32 {
     const color_remap: RemapColors = try lua.toAny(RemapColors, -1);
     _ = lua.pop(1);
 
-    std.debug.print("Sprite {s}, columns: {d}, rows: {d}, out_dir: {s}, frames: {d}\n", .{ name, columns, rows, out_dir, chunks.value.len });
+    std.debug.print("Sprite {s}, columns: {d}, rows: {d}, out_dir: {s}, chunks: {d}\n", .{ name, columns, rows, out_dir, chunks.value.len });
 
-    const resfile = files.get(chunks.value[0].source.file);
     const palette = palettes.get(palette_index);
 
     var aa = std.heap.ArenaAllocator.init(lua.allocator());
     defer aa.deinit();
     const allocator = aa.allocator();
 
-    var output = try allocator.alloc(Output, chunks.value.len);
+    //ugly hack to support []union which contain a member with [], which will give you compile error
+    //about you should usr lua.toAnyAlloc
+    //chunks with non-zero write offset take 2 output slots
+    var output_size: usize = 0;
+    for (chunks.value) |c| {
+        if (c.write_offset == 0) {
+            output_size += 1;
+        } else output_size += 2;
+    }
+    var output = try allocator.alloc(Output, output_size);
     // defer lua.allocator().free(output);
 
-    for (0..output.len) |i| {
-        const frames = try from(allocator, resfile.file, resfile.index[chunks.value[i].source.offset]);
-        output[i] = .{ .transform = .{ .frames = frames, .ops = chunks.value[i].transform } };
+    var i: usize = 0;
+    for (chunks.value) |chunk| {
+        // switch (chunk) {
+        //     .frames => {
+        const resfile = files.get(chunk.source.file);
+        const frames = try from(allocator, resfile.file, resfile.index[chunk.source.offset]);
+        if (chunk.write_offset != 0) {
+            output[i] = .{ .offset = .{ .frames = chunk.write_offset } };
+            i += 1;
+        }
+        output[i] = .{ .transform = .{ .frames = frames, .ops = chunk.transform } };
+        i += 1;
+        //     },
+        //     .seek => {
+        //         output[i] = .{ .seek = .{ .to_frame = chunk.seek.to_frame } };
+        //     },
+        //     .offset => {
+        //         output[i] = .{ .offset = .{ .frames = chunk.offset.frames } };
+        //     },
+        // }
     }
 
     //shoud remap be by chunk?
@@ -145,6 +167,7 @@ pub fn main() !void {
 
     lua.openBase();
     lua.openTable();
+    lua.openPackage();
     lua.pushFunction(zlua.wrap(spriteSheet));
     lua.setGlobal("SpriteSheet");
     lua.pushFunction(zlua.wrap(openFile));
@@ -167,8 +190,6 @@ pub fn main() !void {
             lua.allocator().free(p);
         };
     }
-
-    // const dir: []const u8 = "C:/Projects/data.wwgus";
 
     _ = try lua.getGlobal("Infile");
     const image_path_lua = try lua.toString(-1);
@@ -214,20 +235,6 @@ pub fn main() !void {
     //     try lua.doFile("scripts/sprites.lua");
     // }
 
-    // const ops = [_]FrameBlockOp{.{ .copy = .{ .items = 4 } }};
-    // const ops = copy(4);
-    // const copy56 = [_]FrameBlockOp{.{ .copy = .{ .items = 56 } }};
-    // const replicate56 = [_]FrameBlockOp{.{ .replicate = .{ .items = 1, .times = 56 } }};
-    const ops3 = &[_]FrameBlockOp{
-        .{ .copy = .{ .items = 34 } },
-        .{ .skip = .{ .items = 4 } },
-        .{ .copy = .{ .items = 18 } },
-    };
-    _ = ops3;
-    // allocate pixels, how to get size???
-    // sprite_sheet(name, w, h).from[frames(at_index)(+w,+h).chunks[], frames[at_index](+w, +h).chunks[]]
-    //(read frames(+fsize), apply ops(+image_len) => chunk), write_chunk at offset(+image_size), write_pixels, write image
-
     var frames_arena_allocator = std.heap.ArenaAllocator.init(allocator);
     defer frames_arena_allocator.deinit();
     // const fa = frames_arena_allocator.allocator();
@@ -267,25 +274,6 @@ pub fn main() !void {
 
     //######################TERRAIN
     //indices point to images packed in a .RES file
-    // const sources = [_]Output{
-    //     .{ .transform = .{ .frames = try from(fa, file, index[3]), .ops = &ops } },
-    //     .{ .transform = .{ .frames = try from(fa, file, index[6]), .ops = &ops } },
-    //     .{ .transform = .{ .frames = try from(fa, file, index[9]), .ops = &ops } },
-    //     .{ .transform = .{ .frames = try from(fa, file, index[10]), .ops = &ops } },
-    //     .{ .transform = .{ .frames = try from(fa, file, index[11]), .ops = &ops } },
-    //     .{ .transform = .{ .frames = try from(fa, file, index[12]), .ops = &ops } },
-    //     .{ .transform = .{ .frames = try from(fa, file, index[13]), .ops = &copy56 } },
-    //     .{ .transform = .{ .frames = try from(fa, file, index[3]), .ops = &replicate56 } },
-    //     .{ .offset = .{ .frames = -56 } },
-    //     .{ .transform = .{ .frames = try from(fa, file, index[15]), .ops = &copy56 } },
-    //     .{ .transform = .{ .frames = try from(fa, file, index[9]), .ops = &replicate56 } },
-    //     .{ .offset = .{ .frames = -56 } },
-    //     .{ .transform = .{ .frames = try from(fa, file, index[15]), .ops = &copy56 } },
-    //     .{ .transform = .{ .frames = try from(fa, file, index[10]), .ops = &replicate56 } },
-    //     .{ .offset = .{ .frames = -56 } },
-    //     .{ .transform = .{ .frames = try from(fa, file, index[16]), .ops = &copy56 } },
-    //     .{ .transform = .{ .frames = try from(fa, file, index[17]), .ops = &copy56 } },
-    // };
 
     // _ = sources;
     // const sprite_sheet = try outputFrames(allocator, &sources, noremap, 16, 512);
@@ -616,21 +604,6 @@ const Frame = struct {
     }
 };
 
-fn doUI(allocator: std.mem.Allocator, out_dir: []const u8, name: []const u8, file: std.fs.File, index: []const u32, palette: []color.Rgba32) !void {
-    const frames = try from(allocator, file, index[192]);
-    defer allocator.free(frames);
-    defer for (frames) |*f| {
-        f.deinit();
-    };
-    const cross_source = [_]Output{
-        .{ .transform = .{ .frames = frames, .ops = &copy(8) } },
-    };
-    const cross_image = try outputFrames(allocator, &cross_source, noremap, 1, 8);
-    defer allocator.free(cross_image.pixels);
-
-    try writeImage(allocator, name, out_dir, cross_image.width, cross_image.height, palette[0..256], cross_image.pixels);
-}
-
 const Transpose = struct { rows: usize, cols: usize };
 
 const Replicate = struct { items: usize, times: usize };
@@ -705,8 +678,12 @@ fn outputFrames(
                         }
                     }
                     try std.testing.expect(read_frames <= source.transform.frames.len);
+                    std.debug.print("Adjust out frames to {d}\n", .{out_frames});
                 },
-                .offset => out_frames = @intCast(@as(isize, @intCast(out_frames)) + source.offset.frames),
+                .offset => {
+                    std.debug.print("Out frames is: {d},  Offset is {d}", .{ out_frames, source.offset.frames });
+                    out_frames = @intCast(@as(isize, @intCast(out_frames)) + source.offset.frames);
+                },
                 .seek => out_frames = source.seek.to_frame,
             }
         }
@@ -766,7 +743,7 @@ fn outputFrames(
                         },
                         .skip => {
                             frames_done += o.skip.items;
-                            result_rows += ((frames_done + o.skip.items) / output_cols) - (frames_done / output_cols);
+                            // result_rows += ((frames_done + o.skip.items) / output_cols) - (frames_done / output_cols);
                             std.debug.print("skip frames: {d}, new cursor: {d}\n", .{ o.skip.items, cursor });
                         },
                     }

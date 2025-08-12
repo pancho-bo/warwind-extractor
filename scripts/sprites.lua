@@ -6,11 +6,15 @@ function Copy(items)
    return {copy = {items = items}}
 end
 
+function Skip(items)
+   return {skip = {items = items}}
+end
+
 function Replicate(items, times)
    return {replicate = {items = items, times = times}}
 end
 
-function DatFile(x) 
+function DatFile(x)
     return x
 end
 
@@ -26,8 +30,9 @@ function Transform(x)
     return x
 end
 
-local res001 = ResFile("C:/Program Files/GOG Galaxy/Games/War Wind/Data/RES.001")
-local palette = Palette(res001, 0)
+RES001 = ResFile("C:/Program Files/GOG Galaxy/Games/War Wind/Data/RES.001")
+Palette1 = Palette(RES001, 0)
+local noremap = ColorRemap{ from = 88, to = 88, n = 8}
 
 function OutDir(dir)
     return function(sprite)
@@ -81,14 +86,14 @@ function UnitSprite(offset, name)
         frames = {
             Chunk{
                 source = DatFile{
-                    file = res001,
+                    file = RES001,
                     offset = offset
                 },
                 transform = { Transpose(5, 4), Transpose(5, 4), Replicate(4, 5) },
                 write_offset = 0
             }
         },
-        palette = palette
+        palette = Palette1
     }
 end
 
@@ -139,37 +144,125 @@ SpritesWith {
     UnitSprite(93, "sorcerer")
 }
 
-
+-- UI
 SpriteSheet{
     name = "cross",
     columns = 1,
     rows = 8,
     out_dir = "C:/Projects/data.wwgus/graphics/ui/ww",
-    color_remap = ColorRemap{ from = 88, to = 88, n = 8},
+    color_remap = noremap,
     frames = {
         Chunk{
             source = DatFile{
-                file = res001,
+                file = RES001,
                 offset = 192
             },
             transform = { Copy(8) },
             write_offset = 0
         }
     },
-    palette = palette
+    palette = Palette1
 }
 
--- SpriteSheet{
---     name = "tiles",
---     columns = 16,
---     rows = 20,
---     frames = {
---         Chunk{
---             source = DatFile{
---                 name = "RES.001",
---                 offset = 3
---             },
---             write_offset = 16
---         }
---     }
--- }
+SpriteSheet{
+    name = "cursor",
+    columns = 1,
+    rows = 1,
+    out_dir = "C:/Projects/data.wwgus/graphics/ui/ww/tharoon",
+    color_remap = noremap,
+    frames = {
+        Chunk{
+            source = DatFile{
+                file = RES001,
+                offset = 185
+            },
+            transform = { Copy(1) },
+            write_offset = 0
+        }
+    },
+    palette = Palette1
+}
+
+SpriteSheet{
+    name = "mainpanel",
+    columns = 1,
+    rows = 1,
+    out_dir = "C:/Projects/data.wwgus/graphics/ui/ww/tharoon",
+    color_remap = noremap,
+    frames = {
+        Chunk{
+            source = DatFile{
+                file = RES001,
+                offset = 193
+            },
+            transform = { Copy(1) },
+            write_offset = 0
+        }
+    },
+    palette = Palette1
+}
+
+SpriteSheet{
+    name = "statusline",
+    columns = 1,
+    rows = 1,
+    out_dir = "C:/Projects/data.wwgus/graphics/ui/ww/tharoon",
+    color_remap = noremap,
+    frames = {
+        Chunk{
+            source = DatFile{
+                file = RES001,
+                offset = 193
+            },
+            transform = { Skip(1), Copy(1) },
+            write_offset = 0
+        }
+    },
+    palette = Palette1
+}
+
+SpriteSheet{
+    name = "infopanel",
+    columns = 1,
+    rows = 1,
+    out_dir = "C:/Projects/data.wwgus/graphics/ui/ww/tharoon",
+    color_remap = noremap,
+    frames = {
+        Chunk{
+            source = DatFile{
+                file = RES001,
+                offset = 193
+            },
+            transform = { Skip(21), Copy(1) },
+            write_offset = 0
+        }
+    },
+    palette = Palette1
+}
+
+-- Tilesets
+
+SpriteSheet{
+    name = "swamp",
+    columns = 16,
+    rows = 32,
+    out_dir = "C:/Projects/data.wwgus/graphics/ww/tilesets/swamp",
+    color_remap = ColorRemap{ from = 88, to = 88, n = 8},
+    frames = {
+        Chunk{source = DatFile{ file = RES001, offset = 3},  transform = {Copy(4)} },
+        Chunk{source = DatFile{ file = RES001, offset = 6},  transform = {Copy(4)} },
+        Chunk{source = DatFile{ file = RES001, offset = 9},  transform = {Copy(4)} },
+        Chunk{source = DatFile{ file = RES001, offset = 10}, transform = {Copy(4)} },
+        Chunk{source = DatFile{ file = RES001, offset = 11}, transform = {Copy(4)} },
+        Chunk{source = DatFile{ file = RES001, offset = 12}, transform = {Copy(4)} },
+        Chunk{source = DatFile{ file = RES001, offset = 13}, transform = {Copy(56)} } ,
+        Chunk{source = DatFile{ file = RES001, offset = 3},  transform = {Replicate(1, 56)} },
+        Chunk{source = DatFile{ file = RES001, offset = 15}, transform = {Copy(56)}, write_offset = -56 },
+        Chunk{source = DatFile{ file = RES001, offset = 9},  transform = {Replicate(1, 56)}},
+        Chunk{source = DatFile{ file = RES001, offset = 15}, transform = {Copy(56)}, write_offset = -56 },
+        Chunk{source = DatFile{ file = RES001, offset = 10}, transform = {Replicate(1, 56)}},
+        Chunk{source = DatFile{ file = RES001, offset = 16}, transform = {Copy(56)}, write_offset = -56 },
+        Chunk{source = DatFile{ file = RES001, offset = 17}, transform = {Copy(56)} },
+    },
+    palette = Palette1
+}
