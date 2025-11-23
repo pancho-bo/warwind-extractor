@@ -183,7 +183,7 @@ pub fn main() !void {
             // const message2 = lua.toString(-2) catch "Can't get error from lua";
             std.debug.print("Got error from Lua: {s}\n", .{message});
         }
-        try lua.doFile("scripts/conf.lua");
+        // try lua.doFile("scripts/conf.lua");
         try lua.doFile("scripts/sprites.lua");
         defer for (files.slice()) |f| {
             f.deinit(lua.allocator());
@@ -193,11 +193,11 @@ pub fn main() !void {
         };
     }
 
-    _ = try lua.getGlobal("Infile");
-    const image_path_lua = try lua.toString(-1);
-    const image_path = try allocator.dupeZ(u8, image_path_lua);
-    defer allocator.free(image_path);
-    lua.pop(1);
+    // _ = try lua.getGlobal("Infile");
+    // const image_path_lua = try lua.toString(-1);
+    // const image_path = try allocator.dupeZ(u8, image_path_lua);
+    // defer allocator.free(image_path);
+    // lua.pop(1);
 
     // _ = try lua.getGlobal("Palette");
     // const palette_index: usize = @intCast(try lua.toInteger(-1));
