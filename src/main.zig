@@ -631,20 +631,89 @@ fn outputFrames(
     var max_height: usize = 0;
     var offset_h_min: usize = 0xFFFF_FFFF;
     var offset_w_min: usize = 0xFFFF_FFFF;
+    //should really be Output.iterate |f|
     for (sources) |source| {
         switch (source) {
-            .transform => for (source.transform.frames) |f| {
-                if (f.offset_h < offset_h_min) offset_h_min = f.offset_h;
-                if (f.offset_w < offset_w_min) offset_w_min = f.offset_w;
+            .transform => {
+                var read_frames: usize = 0;
+                for (source.transform.ops) |o| {
+                    switch (o) {
+                        .transpose => {
+                            const read_frames_updated = read_frames + o.transpose.cols * o.transpose.rows;
+                            for (read_frames..read_frames_updated) |i| {
+                                const f = source.transform.frames[i];
+                                if (f.offset_h < offset_h_min) offset_h_min = f.offset_h;
+                                if (f.offset_w < offset_w_min) offset_w_min = f.offset_w;
+                            }
+                            read_frames = read_frames_updated;
+                        },
+                        .replicate => {
+                            const read_frames_updated = read_frames + o.replicate.items;
+                            for (read_frames..read_frames_updated) |i| {
+                                const f = source.transform.frames[i];
+                                if (f.offset_h < offset_h_min) offset_h_min = f.offset_h;
+                                if (f.offset_w < offset_w_min) offset_w_min = f.offset_w;
+                            }
+                            read_frames = read_frames_updated;
+                        },
+                        .copy => {
+                            const read_frames_updated = read_frames + o.copy.items;
+                            for (read_frames..read_frames_updated) |i| {
+                                const f = source.transform.frames[i];
+                                if (f.offset_h < offset_h_min) offset_h_min = f.offset_h;
+                                if (f.offset_w < offset_w_min) offset_w_min = f.offset_w;
+                            }
+                            read_frames = read_frames_updated;
+                        },
+                        .skip => {
+                            const read_frames_updated = read_frames + o.skip.items;
+                            read_frames = read_frames_updated;
+                        },
+                    }
+                }
             },
             else => {},
         }
     }
     for (sources) |source| {
         switch (source) {
-            .transform => for (source.transform.frames) |f| {
-                if (f.height + f.offset_h - offset_h_min > max_height) max_height = f.height + f.offset_h - offset_h_min;
-                if (f.width + f.offset_w - offset_w_min > max_width) max_width = f.width + f.offset_w - offset_w_min;
+            .transform => {
+                var read_frames: usize = 0;
+                for (source.transform.ops) |o| {
+                    switch (o) {
+                        .transpose => {
+                            const read_frames_updated = read_frames + o.transpose.cols * o.transpose.rows;
+                            for (read_frames..read_frames_updated) |i| {
+                                const f = source.transform.frames[i];
+                                if (f.height + f.offset_h - offset_h_min > max_height) max_height = f.height + f.offset_h - offset_h_min;
+                                if (f.width + f.offset_w - offset_w_min > max_width) max_width = f.width + f.offset_w - offset_w_min;
+                            }
+                            read_frames = read_frames_updated;
+                        },
+                        .replicate => {
+                            const read_frames_updated = read_frames + o.replicate.items;
+                            for (read_frames..read_frames_updated) |i| {
+                                const f = source.transform.frames[i];
+                                if (f.height + f.offset_h - offset_h_min > max_height) max_height = f.height + f.offset_h - offset_h_min;
+                                if (f.width + f.offset_w - offset_w_min > max_width) max_width = f.width + f.offset_w - offset_w_min;
+                            }
+                            read_frames = read_frames_updated;
+                        },
+                        .copy => {
+                            const read_frames_updated = read_frames + o.copy.items;
+                            for (read_frames..read_frames_updated) |i| {
+                                const f = source.transform.frames[i];
+                                if (f.height + f.offset_h - offset_h_min > max_height) max_height = f.height + f.offset_h - offset_h_min;
+                                if (f.width + f.offset_w - offset_w_min > max_width) max_width = f.width + f.offset_w - offset_w_min;
+                            }
+                            read_frames = read_frames_updated;
+                        },
+                        .skip => {
+                            const read_frames_updated = read_frames + o.skip.items;
+                            read_frames = read_frames_updated;
+                        },
+                    }
+                }
             },
             else => {},
         }
@@ -709,7 +778,7 @@ fn outputFrames(
                             // defer allocator.free(frames_perm);
                             const frames_to_do: usize = o.transpose.cols * o.transpose.rows;
                             // write_block(o.transpose.cols, o.transpose.rows, frames, frames_perm, combined_image_storage[frames_done * max_height * max_width .. (frames_done + frames_to_do) * max_height * max_width]);
-                            var chunk = try as_chunk(allocator, source.transform.frames);
+                            var chunk = try as_chunk(allocator, source.transform.frames, max_width, max_height, offset_w_min, offset_h_min);
                             defer allocator.destroy(chunk);
                             chunk.slice(frames_done, frames_done + frames_to_do);
                             const frames_perm = try chunk.transpose(allocator, o.transpose.rows, o.transpose.cols);
@@ -721,7 +790,7 @@ fn outputFrames(
                             std.debug.print("frames done: {d}, frames to do: {d}, rows done: {d}\n", .{ frames_done, frames_to_do, result_rows });
                         },
                         .replicate => {
-                            var chunk = try as_chunk(allocator, source.transform.frames);
+                            var chunk = try as_chunk(allocator, source.transform.frames, max_width, max_height, offset_w_min, offset_h_min);
                             defer allocator.destroy(chunk);
                             chunk.slice(frames_done, frames_done + o.replicate.items);
                             std.debug.print("Slicing for replicate: from {d} to {d} times: {d}\n", .{ frames_done, frames_done + o.replicate.items, o.replicate.times });
@@ -732,7 +801,7 @@ fn outputFrames(
                             cursor += o.replicate.items * o.replicate.times;
                         },
                         .copy => {
-                            var chunk = try as_chunk(allocator, source.transform.frames);
+                            var chunk = try as_chunk(allocator, source.transform.frames, max_width, max_height, offset_w_min, offset_h_min);
                             defer allocator.destroy(chunk);
                             chunk.slice(frames_done, frames_done + o.copy.items);
                             std.debug.print("Slicing for copy: from {d} to {d}\n", .{ frames_done, frames_done + o.copy.items });
@@ -743,7 +812,6 @@ fn outputFrames(
                         },
                         .skip => {
                             frames_done += o.skip.items;
-                            // result_rows += ((frames_done + o.skip.items) / output_cols) - (frames_done / output_cols);
                             std.debug.print("skip frames: {d}, new cursor: {d}\n", .{ o.skip.items, cursor });
                         },
                     }
@@ -786,19 +854,14 @@ fn writeImage(allocator: std.mem.Allocator, name: []const u8, dir: []const u8, w
     try combined_image.writeToFilePath(outfile, .{ .png = .{} });
 }
 
-fn as_chunk(allocator: std.mem.Allocator, frames: []const Frame) !*FrameChunk {
-    var max_width: usize = 0;
-    var max_height: usize = 0;
-    var offset_h_min: usize = 0xFFFF_FFFF;
-    var offset_w_min: usize = 0xFFFF_FFFF;
-    for (frames) |f| {
-        if (f.offset_h < offset_h_min) offset_h_min = f.offset_h;
-        if (f.offset_w < offset_w_min) offset_w_min = f.offset_w;
-    }
-    for (frames) |f| {
-        if (f.height + f.offset_h - offset_h_min > max_height) max_height = f.height + f.offset_h - offset_h_min;
-        if (f.width + f.offset_w - offset_w_min > max_width) max_width = f.width + f.offset_w - offset_w_min;
-    }
+fn as_chunk(
+    allocator: std.mem.Allocator,
+    frames: []const Frame,
+    max_width: usize,
+    max_height: usize,
+    offset_w_min: usize,
+    offset_h_min: usize,
+) !*FrameChunk {
     const chunk = try allocator.create(FrameChunk);
     chunk.* = FrameChunk{
         .rows = frames.len,

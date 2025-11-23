@@ -224,7 +224,7 @@ SpriteSheet{
 SpriteSheet{
     name = "infopanel",
     columns = 1,
-    rows = 1,
+    rows = 4,
     out_dir = "C:/Projects/data.wwgus/graphics/ui/ww/tharoon",
     color_remap = noremap,
     frames = {
@@ -233,7 +233,45 @@ SpriteSheet{
                 file = RES001,
                 offset = 193
             },
-            transform = { Skip(21), Copy(1) },
+            transform = { Skip(21), Replicate(1, 4) },
+            write_offset = 0
+        }
+    },
+    palette = Palette1
+}
+
+SpriteSheet{
+    name = "large",
+    columns = 16,
+    rows = 15,
+    out_dir = "C:/Projects/data.wwgus/graphics/ui/ww/tharoon/fonts",
+    color_remap = noremap,
+    frames = {
+        Chunk{
+            source = DatFile{
+                file = RES001,
+                offset = 231
+            },
+            transform = { Skip(32), Copy(232) },
+            write_offset = 0
+        }
+    },
+    palette = Palette1
+}
+
+SpriteSheet{
+    name = "small",
+    columns = 16,
+    rows = 15,
+    out_dir = "C:/Projects/data.wwgus/graphics/ui/ww/tharoon/fonts",
+    color_remap = noremap,
+    frames = {
+        Chunk{
+            source = DatFile{
+                file = RES001,
+                offset = 233
+            },
+            transform = { Skip(32), Copy(228) },
             write_offset = 0
         }
     },
