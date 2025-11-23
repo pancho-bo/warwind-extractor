@@ -90,6 +90,8 @@ pub fn spriteSheet(lua: *Lua) !i32 {
     const color_remap: RemapColors = try lua.toAny(RemapColors, -1);
     _ = lua.pop(1);
 
+    try createTree(out_dir);
+
     std.debug.print("Sprite {s}, columns: {d}, rows: {d}, out_dir: {s}, chunks: {d}\n", .{ name, columns, rows, out_dir, chunks.value.len });
 
     const palette = palettes.get(palette_index);
@@ -988,8 +990,28 @@ fn outputPalette(allocator: std.mem.Allocator, palette: []color.Rgba32) void {
     }
 }
 
+pub fn createTree(path: []const u8) !void {
+    if (!Fs.path.isAbsolute(path)) {
+        return Fs.cwd().makePath(path);
+    }
+    var iterator = try Fs.path.componentIterator(path);
+    while (iterator.next()) |component| {
+        var dir = Fs.openDirAbsolute(component.path, .{}) catch |err| blk: {
+            switch (err) {
+                Fs.File.OpenError.FileNotFound => {
+                    try Fs.makeDirAbsolute(component.path);
+                    break :blk try Fs.openDirAbsolute(component.path, .{});
+                },
+                else => return err,
+            }
+        };
+        dir.close();
+    }
+}
+
 const std = @import("std");
 const zigimg = @import("zigimg");
 const color = zigimg.color;
 const zlua = @import("zlua");
 const Lua = zlua.Lua;
+const Fs = std.fs;
